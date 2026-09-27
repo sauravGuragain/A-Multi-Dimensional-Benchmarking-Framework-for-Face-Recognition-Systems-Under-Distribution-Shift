@@ -1,0 +1,111 @@
+experiment_name: lfw_full_benchmark
+description: >
+  Complete FaceEval-X benchmark on LFW: all traditional ML and deep learning
+  models evaluated under all perturbation types and 6 severity levels.
+  Produces behavioral fingerprints, failure analysis, and deployment scores
+  for all 5 deployment scenarios.
+
+# ── Reproducibility ────────────────────────────────────────────────────────
+random_seed: 42
+deterministic_mode: true
+
+# ── Data ───────────────────────────────────────────────────────────────────
+dataset_names:
+  - lfw
+data_root: data/
+split_strategy: subject_disjoint
+test_fraction: 0.30
+val_fraction: 0.10
+
+# ── Models ─────────────────────────────────────────────────────────────────
+traditional_models:
+  - eigenfaces
+  - fisherfaces
+  - lbph
+  - pca_svm
+  - hog_svm
+  - knn
+
+deep_models:
+  - facenet
+  - arcface
+  - insightface
+  - dlib_fr
+
+# ── Perturbation schedule ──────────────────────────────────────────────────
+perturbation_schedule:
+  perturbation_types:
+    - gaussian_blur
+    - motion_blur
+    - gaussian_noise
+    - salt_pepper_noise
+    - speckle_noise
+    - brightness
+    - contrast
+    - gamma
+    - rotation
+    - scaling
+    - cropping
+    - random_occlusion
+    - face_mask
+    - sunglasses
+    - jpeg_compression
+    - resolution_degradation
+  severity_levels:
+    - 0.0
+    - 0.2
+    - 0.4
+    - 0.6
+    - 0.8
+    - 1.0
+  compose_perturbations: false
+
+# ── Evaluation flags ───────────────────────────────────────────────────────
+compute_calibration: true
+compute_fairness: true
+compute_fingerprints: true
+compute_failure_analysis: true
+compute_deployment_scores: true
+
+deployment_scenarios:
+  - border_control
+  - access_control
+  - mobile_authentication
+  - surveillance
+  - research_benchmark
+
+# ── Custom scenario weights (override defaults for ablation study) ─────────
+# Uncomment to use custom weights:
+# custom_deployment_weights:
+#   border_control:
+#     accuracy: 0.35
+#     robustness: 0.25
+#     calibration: 0.10
+#     fairness: 0.15
+#     latency: 0.05
+#     memory: 0.05
+#     computational_cost: 0.05
+
+# ── Resource profiling ─────────────────────────────────────────────────────
+profile_resources: true
+profile_batch_size: 32
+
+# ── Feature caching ────────────────────────────────────────────────────────
+use_feature_cache: true
+feature_cache_dir: experiments/cache/lfw_full/
+
+# ── Output ─────────────────────────────────────────────────────────────────
+output_dir: experiments/lfw_full_benchmark/
+report_dir: reports/lfw_full_benchmark/
+export_svg: true
+export_png: true
+export_csv: true
+export_json: true
+generate_pdf_report: true
+
+# ── MLflow ─────────────────────────────────────────────────────────────────
+mlflow_tracking_uri: sqlite:///experiments/mlflow.db
+mlflow_experiment_name: lfw_full_benchmark
+
+# ── Hardware ───────────────────────────────────────────────────────────────
+device: auto   # auto-detects CUDA if available, falls back to CPU

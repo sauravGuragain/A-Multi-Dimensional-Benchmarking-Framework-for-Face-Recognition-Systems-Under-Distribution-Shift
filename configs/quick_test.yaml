@@ -1,0 +1,56 @@
+experiment_name: quick_test
+description: Fast smoke-test configuration for development. 2 models, 3 perturbations.
+
+random_seed: 42
+deterministic_mode: true
+
+dataset_names:
+  - lfw
+data_root: data/
+split_strategy: subject_disjoint
+test_fraction: 0.30
+val_fraction: 0.10
+
+traditional_models:
+  - eigenfaces
+  - hog_svm
+
+deep_models:
+  - facenet
+
+perturbation_schedule:
+  perturbation_types:
+    - gaussian_blur
+    - brightness
+    - rotation
+  severity_levels:
+    - 0.0
+    - 0.5
+    - 1.0
+  compose_perturbations: false
+
+compute_calibration: true
+compute_fairness: false
+compute_fingerprints: true
+compute_failure_analysis: true
+compute_deployment_scores: true
+
+deployment_scenarios:
+  - research_benchmark
+
+profile_resources: false
+use_feature_cache: true
+feature_cache_dir: experiments/cache/quick_test/
+
+output_dir: experiments/quick_test/
+report_dir: reports/quick_test/
+export_svg: false
+export_png: true
+export_csv: true
+export_json: true
+generate_pdf_report: false
+
+mlflow_tracking_uri: sqlite:///experiments/mlflow.db
+mlflow_experiment_name: quick_test
+
+device: cpu

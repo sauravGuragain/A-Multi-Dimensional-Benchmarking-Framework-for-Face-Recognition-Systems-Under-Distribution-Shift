@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Experiment artifacts (generated, not source)
+experiments/
+reports/
+data/
+*.db
+*.sqlite3
+mlruns/
+
+# Node / frontend
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Environment secrets
+.env
+.env.local
