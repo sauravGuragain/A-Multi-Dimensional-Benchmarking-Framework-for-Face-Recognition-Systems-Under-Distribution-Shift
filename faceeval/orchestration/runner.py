@@ -156,7 +156,8 @@ class ExperimentRunner:
         # between train/test) is the correct strategy for open-set
         # verification benchmarks, not for the identification metrics this
         # runner reports. See faceeval.data.splitter module docstring.
-        split = splitter.split(records, SplitStrategy.STRATIFIED, dataset_name="synthetic")
+        dataset_name = config.dataset_names[0] if config.dataset_names else "synthetic"
+        split = splitter.split(records, config.split_strategy, dataset_name=dataset_name)
 
         records_by_id = {r.image_id: r for r in records}
         train_records = [records_by_id[i] for i in split.train_ids]
@@ -311,16 +312,44 @@ class ExperimentRunner:
 
     def _load_or_generate_data(self) -> tuple[list, dict]:
         """
-        Resolve the data source for this run.
+        Resolve the data source based on config.dataset_names.
 
-        Currently always uses the synthetic generator — real dataset loading
-        via ``faceeval.data.DatasetManager`` is a follow-up integration once
-        a real dataset (e.g. LFW) is downloaded and ``data_root`` populated.
+        Dispatches to synthetic data generator or real dataset loader (LFW).
         """
-        from faceeval.orchestration.synthetic_data import generate_synthetic_dataset
-        logger.info("Generating synthetic dataset for run '%s'...", self._config.run_id)
-        return generate_synthetic_dataset(
-            n_subjects=20, images_per_subject=12, seed=self._config.random_seed,
+        config = self._config
+
+        if not config.dataset_names or "synthetic" in config.dataset_names:
+            from faceeval.orchestration.synthetic_data import generate_synthetic_dataset
+            logger.info("Generating synthetic dataset for run '%s'...", config.run_id)
+            return generate_synthetic_dataset(
+                n_subjects=20, images_per_subject=12, seed=config.random_seed,
+            )
+
+        if "lfw" in config.dataset_names:
+            from faceeval.data.loaders.lfw import load_lfw_dataset
+            from pathlib import Path
+            lfw_root = Path(config.data_root) / "lfw"
+            if not lfw_root.exists():
+                raise OrchestratorError(
+                    f"LFW root not found at {lfw_root}. "
+                    f"Download from http://vis-www.cs.umass.edu/lfw/"
+                )
+            logger.info("Loading LFW dataset from '%s' for run '%s'...", lfw_root, config.run_id)
+            records, images = load_lfw_dataset(
+                lfw_root=str(lfw_root),
+                aligned=True,
+                load_pixels=True,
+                seed=config.random_seed,
+            )
+            logger.info(
+                "LFW loaded: %d total images, %d unique subjects",
+                len(images), len(set(r.subject_id for r in records))
+            )
+            return records, images
+
+        raise OrchestratorError(
+            f"Unknown dataset_names: {config.dataset_names}. "
+            f"Valid: ['synthetic'], ['lfw'], or empty (defaults to synthetic)."
         )
 
     @staticmethod

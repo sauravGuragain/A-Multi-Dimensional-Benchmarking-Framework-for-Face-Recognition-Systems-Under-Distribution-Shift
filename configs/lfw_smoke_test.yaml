@@ -1,0 +1,62 @@
+experiment_name: lfw_smoke_test
+description: >
+  Small smoke-test configuration for LFW dataset.
+  Validates the data loading, preprocessing, and evaluation pipeline
+  before running the full 960-condition benchmark.
+
+  PROTOCOL: Closed-set face identification under distribution shift.
+  This framework measures robustness to perturbations for known subjects only.
+
+random_seed: 42
+deterministic_mode: true
+
+dataset_names:
+  - lfw
+data_root: data/
+split_strategy: stratified
+test_fraction: 0.30
+val_fraction: 0.10
+
+traditional_models:
+  - eigenfaces
+  - hog_svm
+
+deep_models:
+  - facenet
+
+perturbation_schedule:
+  perturbation_types:
+    - gaussian_blur
+    - brightness
+    - rotation
+  severity_levels:
+    - 0.0
+    - 0.5
+    - 1.0
+  compose_perturbations: false
+
+compute_calibration: true
+compute_fairness: true
+compute_fingerprints: true
+compute_failure_analysis: true
+compute_deployment_scores: true
+
+deployment_scenarios:
+  - research_benchmark
+
+profile_resources: false
+use_feature_cache: true
+feature_cache_dir: experiments/cache/lfw_smoke_test/
+
+output_dir: experiments/lfw_smoke_test/
+report_dir: reports/lfw_smoke_test/
+export_svg: false
+export_png: true
+export_csv: true
+export_json: true
+generate_pdf_report: false
+
+mlflow_tracking_uri: sqlite:///experiments/mlflow.db
+mlflow_experiment_name: lfw_smoke_test
+
+device: cpu

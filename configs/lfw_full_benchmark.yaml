@@ -6,6 +6,15 @@ description: >
   for all 5 deployment scenarios.
 
 # ── Reproducibility ────────────────────────────────────────────────────────
+  
+  PROTOCOL: Closed-set face identification under distribution shift.
+  EVALUATION: Stratified split (same subjects in train and test, held-out images).
+  LIMITATION: This is a non-standard use of LFW. Official LFW benchmarks use
+  verification (ROC curves on pairs) or open-set identification. This framework
+  measures robustness to perturbations for known subjects only, which isolates
+  the perturbation effect from the unknown-subject problem. Results are not
+  directly comparable to published LFW verification benchmarks.
+
 random_seed: 42
 deterministic_mode: true
 
