@@ -168,6 +168,19 @@ class ExperimentRunner:
                 "Synthetic split produced an empty train or test set — "
                 "increase n_subjects in the synthetic data generator."
             )
+                # DEBUG: Log split statistics
+        train_subject_ids = sorted({r.subject_id for r in train_records})
+        test_subject_ids = sorted({r.subject_id for r in test_records})
+        logger.info(
+            "[SPLIT DEBUG] Total subjects: %d, Train subjects: %d, Test subjects: %d",
+            n_classes, len(train_subject_ids), len(test_subject_ids)
+        )
+        logger.info(
+            "[SPLIT DEBUG] Total records: %d, Train records: %d, Test records: %d",
+            len(records), len(train_records), len(test_records)
+        )
+        logger.info("[SPLIT DEBUG] Train subject IDs: %s", train_subject_ids[:5])
+        logger.info("[SPLIT DEBUG] Test subject IDs: %s", test_subject_ids[:5])
 
         # --- 2. Perturbation schedule ---
         composer = PerturbationComposer(
@@ -241,6 +254,30 @@ class ExperimentRunner:
                     metrics = compute_identification_metrics(
                         predictions, y_test, class_labels=sorted(set(y_train) | set(y_test)),
                     )
+                                        # DEBUG: Log sample predictions vs ground truth
+                    if spec.severity == 0.0:
+                        logger.info(
+                            "[PREDICTIONS DEBUG] %s @ severity 0.0 — accuracy: %.4f",
+                            model_name, metrics["accuracy"]
+                        )
+
+                        for i in range(min(5, len(predictions))):
+                            pred_id = predictions[i].predicted_subject_id or "NONE"
+                            true_id = y_test[i]
+                            match = "✓" if pred_id == true_id else "✗"
+                            logger.info(
+                                "[PREDICTIONS DEBUG]   Sample %d: predicted=%s, true=%s %s",
+                                i, pred_id, true_id, match
+                            )
+
+                        cm = metrics["confusion_matrix"]
+                        cm_diag_sum = sum(
+                            cm[i][i] for i in range(len(cm))
+                        )
+                        logger.info(
+                            "[PREDICTIONS DEBUG]   Confusion matrix diagonal sum (correct): %d / %d",
+                            cm_diag_sum, metrics["num_samples"]
+                        )
 
                     result = EvaluationResult(
                         run_id=run.run_id,
