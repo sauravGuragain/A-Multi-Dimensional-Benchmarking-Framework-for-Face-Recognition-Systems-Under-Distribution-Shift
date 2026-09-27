@@ -431,6 +431,42 @@ class ExperimentRunner:
                     run.deployment_rankings.append(ranking)
 
         self._cb("post_processing", 2, 4)
+
+        # Report generation and CSV/JSON export
+        if config.export_csv or config.export_json:
+            from faceeval.reporting.generator import ReportGenerator
+
+            reporter = ReportGenerator(
+                output_dir=config.report_dir,
+                run_id=run.run_id,
+            )
+
+            reporter.build_report(run)
+
+            if config.export_csv:
+                reporter.export_evaluation_results_csv(
+                    run.evaluation_results
+                )
+                reporter.export_fingerprint_csv(
+                    run.fingerprints
+                )
+                reporter.export_deployment_csv(
+                    run.deployment_rankings
+                )
+                reporter.export_failure_cluster_csv(
+                    run.failure_clusters
+                )
+
+                logger.info(
+                    "CSV exports written to %s",
+                    config.report_dir,
+                )
+
+            if config.export_json:
+                logger.info(
+                    "JSON export requested but not yet implemented."
+                )
+
         self._cb("post_processing", 3, 4)
         self._cb("post_processing", 4, 4)
         logger.info("Post-processing complete.")
