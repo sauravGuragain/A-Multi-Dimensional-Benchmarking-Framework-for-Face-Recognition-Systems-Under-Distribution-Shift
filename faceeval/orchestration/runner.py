@@ -116,6 +116,7 @@ class ExperimentRunner:
         # Import model and perturbation registrations
         import faceeval.models          # noqa: F401
         import faceeval.perturbation    # noqa: F401
+        import faceeval.data.loaders    # noqa: F401  (triggers @register_dataset decorators)
 
         env = capture_environment_snapshot()
         logger.info("Environment: %s", env.get("platform", ""))
@@ -284,7 +285,7 @@ class ExperimentRunner:
                         run_id=run.run_id,
                         model_name=model_name,
                         model_paradigm=paradigm,
-                        dataset_name="synthetic",
+                        dataset_name=dataset_name,
                         perturbation_spec=spec,
                         accuracy=metrics["accuracy"],
                         precision=metrics["precision_macro"],
@@ -312,12 +313,14 @@ class ExperimentRunner:
 
     def _load_or_generate_data(self) -> tuple[list, dict]:
         """
-        Resolve the data source based on config.dataset_names.
+        Resolve the data source: synthetic (in-memory) or LFW (disk-based).
 
-        Dispatches to synthetic data generator or real dataset loader (LFW).
+        Synthetic: Returns (records, raw_images_dict) for in-memory preprocessing.
+        LFW: Returns (records, None); preprocessing uses PreprocessingPipeline.process().
         """
         config = self._config
 
+        # Synthetic path: in-memory dataset with pre-loaded pixels
         if not config.dataset_names or "synthetic" in config.dataset_names:
             from faceeval.orchestration.synthetic_data import generate_synthetic_dataset
             logger.info("Generating synthetic dataset for run '%s'...", config.run_id)
@@ -325,27 +328,23 @@ class ExperimentRunner:
                 n_subjects=20, images_per_subject=12, seed=config.random_seed,
             )
 
+        # LFW path: disk-based dataset with on-demand pixel loading via pipeline
         if "lfw" in config.dataset_names:
-            from faceeval.data.loaders.lfw import load_lfw_dataset
-            from pathlib import Path
-            lfw_root = Path(config.data_root) / "lfw"
-            if not lfw_root.exists():
+            from faceeval.data.dataset_manager import DatasetManager
+            manager = DatasetManager(data_root=config.data_root)
+            try:
+                manager.register("lfw")
+            except Exception as e:
                 raise OrchestratorError(
-                    f"LFW root not found at {lfw_root}. "
-                    f"Download from http://vis-www.cs.umass.edu/lfw/"
+                    f"Failed to register LFW dataset: {e}. "
+                    "Ensure LFW is downloaded to data/lfw/ from https://vis-www.cs.umass.edu/lfw/"
                 )
-            logger.info("Loading LFW dataset from '%s' for run '%s'...", lfw_root, config.run_id)
-            records, images = load_lfw_dataset(
-                lfw_root=str(lfw_root),
-                aligned=True,
-                load_pixels=True,
-                seed=config.random_seed,
-            )
+            records = manager.get_records("lfw")
             logger.info(
-                "LFW loaded: %d total images, %d unique subjects",
-                len(images), len(set(r.subject_id for r in records))
+                "LFW registered: %d total images, %d unique subjects",
+                len(records), len(set(r.subject_id for r in records))
             )
-            return records, images
+            return records, None  # None signals pixel loading via pipeline
 
         raise OrchestratorError(
             f"Unknown dataset_names: {config.dataset_names}. "
@@ -355,19 +354,37 @@ class ExperimentRunner:
     @staticmethod
     def _preprocess_records(pipeline, records, raw_images: dict) -> list:
         """
-        Run the preprocessing pipeline on a list of records using in-memory
-        synthetic pixel data rather than reading from disk.
+        Run the preprocessing pipeline on a list of records.
+
+        - Synthetic: raw_images dict contains pre-loaded pixels; use directly.
+        - LFW/real: raw_images is None; use disk-based pixel loading via cv2.imread.
         """
         import cv2
         processed = []
         for rec in records:
-            img_bgr = raw_images[rec.image_id]
-            detection = pipeline._whole_image_detection(img_bgr, rec.image_path)
-            aligned = pipeline.aligner.align(img_bgr, detection)
-            if aligned is None:
-                raise RuntimeError(f"Alignment failed for synthetic image '{rec.image_id}'")
-            normalised = pipeline.normalizer.normalize(aligned.image)
-            processed.append(normalised)
+            # Synthetic path: in-memory pixel data
+            if raw_images is not None:
+                img_bgr = raw_images[rec.image_id]
+                detection = pipeline._whole_image_detection(img_bgr, rec.image_path)
+                aligned = pipeline.aligner.align(img_bgr, detection)
+                if aligned is None:
+                    raise RuntimeError(f"Alignment failed for synthetic image '{rec.image_id}'")
+                normalised = pipeline.normalizer.normalize(aligned.image)
+                processed.append(normalised)
+            # LFW/real path: disk-based pixel loading via pipeline
+            else:
+                img_bgr = cv2.imread(rec.image_path)
+                if img_bgr is None:
+                    raise RuntimeError(
+                        f"Failed to load image from disk: '{rec.image_path}'. "
+                        "File may not exist or is unreadable."
+                    )
+                detection = pipeline._whole_image_detection(img_bgr, rec.image_path)
+                aligned = pipeline.aligner.align(img_bgr, detection)
+                if aligned is None:
+                    raise RuntimeError(f"Alignment failed for image '{rec.image_path}'")
+                normalised = pipeline.normalizer.normalize(aligned.image)
+                processed.append(normalised)
         return processed
 
     @staticmethod
