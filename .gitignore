@@ -36,3 +36,5 @@ dashboard/.vite/
 # Environment secrets
 .env
 .env.local
+phase_b_apply.sh
+phase_b_apply.sh
