@@ -38,3 +38,4 @@ dashboard/.vite/
 .env.local
 phase_b_apply.sh
 phase_b_apply.sh
+.venv-facenet/

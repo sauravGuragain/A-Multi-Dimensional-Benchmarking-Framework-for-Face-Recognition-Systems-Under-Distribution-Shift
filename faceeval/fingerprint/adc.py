@@ -216,7 +216,7 @@ def _compute_auc(points: list[ADCPoint], n_classes: int | None) -> float:
     severities = severities[order]
     accuracies = accuracies[order]
 
-    raw_auc = float(np.trapezoid(accuracies, severities))
+    raw_auc = float(np.trapz(accuracies, severities))
 
     if n_classes is not None and n_classes > 1:
         chance = 1.0 / n_classes
