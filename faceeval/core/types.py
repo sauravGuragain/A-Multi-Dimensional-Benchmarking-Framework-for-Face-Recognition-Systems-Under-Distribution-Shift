@@ -846,6 +846,9 @@ class ExperimentConfig:
     # Data
     dataset_names: list[str] = field(default_factory=list)
     data_root: str = "data/"
+    # Optional dataset-size controls. Defaults preserve the full dataset.
+    min_images_per_subject: int = 0
+    max_subjects: int | None = None
     split_strategy: SplitStrategy = SplitStrategy.SUBJECT_DISJOINT
     test_fraction: float = 0.3
     val_fraction: float = 0.1

@@ -88,6 +88,9 @@ class _ExperimentConfigSchema(BaseModel):
     # Data
     dataset_names: list[str] = Field(default_factory=list)
     data_root: str = "data/"
+    # Optional dataset-size controls. Defaults preserve the full dataset.
+    min_images_per_subject: int = Field(default=0, ge=0)
+    max_subjects: int | None = Field(default=None, ge=1)
     split_strategy: str = SplitStrategy.SUBJECT_DISJOINT.value
     test_fraction: float = Field(default=0.3, ge=0.0, lt=1.0)
     val_fraction: float = Field(default=0.1, ge=0.0, lt=1.0)
@@ -304,6 +307,8 @@ class ConfigLoader:
             deterministic_mode=schema.deterministic_mode,
             dataset_names=schema.dataset_names,
             data_root=schema.data_root,
+            min_images_per_subject=schema.min_images_per_subject,
+            max_subjects=schema.max_subjects,
             split_strategy=SplitStrategy(schema.split_strategy),
             test_fraction=schema.test_fraction,
             val_fraction=schema.val_fraction,

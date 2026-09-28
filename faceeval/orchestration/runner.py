@@ -84,6 +84,10 @@ class ExperimentRunner:
             self._post_process(run)
             run.status = ExperimentStatus.COMPLETED
             run.completed_at = datetime.utcnow()
+
+            from faceeval.storage.result_store import ResultStore
+            ResultStore().save(run)
+
             logger.info(
                 "Experiment '%s' completed in %.1f s.",
                 config.experiment_name,
@@ -93,6 +97,10 @@ class ExperimentRunner:
             run.status = ExperimentStatus.FAILED
             run.error_message = str(exc)
             run.completed_at = datetime.utcnow()
+
+            from faceeval.storage.result_store import ResultStore
+            ResultStore().save(run)
+
             logger.error("Experiment '%s' FAILED: %s", config.experiment_name, exc)
             raise OrchestratorError(f"Run '{config.run_id}' failed: {exc}") from exc
 
@@ -340,6 +348,48 @@ class ExperimentRunner:
                     "Ensure LFW is downloaded to data/lfw/ from https://vis-www.cs.umass.edu/lfw/"
                 )
             records = manager.get_records("lfw")
+
+            # Optional deterministic subset for smoke tests / small validation runs.
+            # Defaults (min_images_per_subject=0, max_subjects=None) preserve
+            # the complete LFW dataset for the full benchmark.
+            min_images = config.min_images_per_subject
+            max_subjects = config.max_subjects
+
+            if min_images > 0 or max_subjects is not None:
+                from collections import defaultdict
+                import random
+
+                by_subject = defaultdict(list)
+                for record in records:
+                    by_subject[record.subject_id].append(record)
+
+                eligible_subjects = sorted(
+                    subject
+                    for subject, subject_records in by_subject.items()
+                    if len(subject_records) >= min_images
+                )
+
+                if max_subjects is not None and len(eligible_subjects) > max_subjects:
+                    rng = random.Random(config.random_seed)
+                    rng.shuffle(eligible_subjects)
+                    eligible_subjects = sorted(eligible_subjects[:max_subjects])
+
+                selected = set(eligible_subjects)
+                records = [
+                    record for record in records
+                    if record.subject_id in selected
+                ]
+
+                logger.info(
+                    "LFW subset selected: %d images, %d subjects "
+                    "(min_images_per_subject=%d, max_subjects=%s, seed=%d)",
+                    len(records),
+                    len(selected),
+                    min_images,
+                    max_subjects,
+                    config.random_seed,
+                )
+
             logger.info(
                 "LFW registered: %d total images, %d unique subjects",
                 len(records), len(set(r.subject_id for r in records))
