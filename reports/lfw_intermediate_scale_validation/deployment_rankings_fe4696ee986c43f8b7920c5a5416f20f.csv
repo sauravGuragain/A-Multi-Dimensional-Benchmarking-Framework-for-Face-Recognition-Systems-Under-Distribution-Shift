@@ -1,0 +1,5 @@
+scenario,rank,model_name,paradigm,total_score,score_accuracy,score_robustness,score_calibration,score_fairness,score_latency,score_memory,score_computational_cost,recommendation
+research_benchmark,1,arcface,deep_learning,0.567887,0.839433,0.5,0.5,0.5,0.5,0.5,0.5,Conditional fit for research benchmark — review weakest dimension before deploying. Score=0.568. Strongest: accuracy (0.839). Weakest: robustness (0.500).
+research_benchmark,2,facenet,deep_learning,0.478539,0.392696,0.5,0.5,0.5,0.5,0.5,0.5,Conditional fit for research benchmark — review weakest dimension before deploying. Score=0.479. Strongest: computational_cost (0.500). Weakest: accuracy (0.393).
+research_benchmark,3,hog_svm,traditional,0.435651,0.178253,0.5,0.5,0.5,0.5,0.5,0.5,Not recommended for research benchmark. Score=0.436. Strongest: computational_cost (0.500). Weakest: accuracy (0.178).
+research_benchmark,4,eigenfaces,traditional,0.432686,0.163432,0.5,0.5,0.5,0.5,0.5,0.5,Not recommended for research benchmark. Score=0.433. Strongest: computational_cost (0.500). Weakest: accuracy (0.163).
