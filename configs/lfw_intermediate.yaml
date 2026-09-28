@@ -1,0 +1,73 @@
+# LFW Intermediate Scale Validation
+
+experiment_name: lfw_intermediate_scale_validation
+
+description: >
+  Intermediate scale validation: 200 subjects, 4 core models, 3 perturbations,
+  3 severity levels = 36 conditions. Validates pipeline scalability and fairness
+  metric computation before full 960-condition benchmark (5,749 subjects).
+
+  This is NOT a representative benchmark; it is a scale-validation experiment.
+  Results measure fairness computation feasibility, not face recognition robustness.
+
+random_seed: 42
+deterministic_mode: true
+
+dataset_names:
+  - lfw
+
+data_root: data/
+
+split_strategy: stratified
+test_fraction: 0.30
+val_fraction: 0.10
+
+min_images_per_subject: 8
+max_subjects: 200
+
+traditional_models:
+  - eigenfaces
+  - hog_svm
+
+deep_models:
+  - facenet
+  - arcface
+
+perturbation_schedule:
+  perturbation_types:
+    - gaussian_blur
+    - rotation
+    - brightness
+  severity_levels:
+    - 0.0
+    - 0.5
+    - 1.0
+  compose_perturbations: false
+
+compute_calibration: true
+compute_fairness: true
+compute_failure_analysis: true
+compute_deployment_scores: true
+compute_fingerprints: true
+
+profile_resources: false
+
+use_feature_cache: true
+feature_cache_dir: experiments/cache/lfw_intermediate_scale_validation/
+
+deployment_scenarios:
+  - research_benchmark
+
+output_dir: experiments/lfw_intermediate_scale_validation/
+report_dir: reports/lfw_intermediate_scale_validation/
+
+export_svg: false
+export_png: true
+export_csv: true
+export_json: true
+generate_pdf_report: false
+
+mlflow_tracking_uri: sqlite:///experiments/mlflow.db
+mlflow_experiment_name: lfw_intermediate_scale_validation
+
+device: cpu
