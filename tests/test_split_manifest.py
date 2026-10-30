@@ -597,11 +597,60 @@ def test_shuffled_order_report_states_that_it_is_a_comparison_not_a_reproduction
 
 # ------------------------------------------------------------------ integration
 def test_import_compatibility_and_determinism():
-    import importlib
-    import faceeval.evaluation.pairs as pairs_mod
-    importlib.reload(pairs_mod)
-    importlib.reload(S)
-    assert S.validate_images is pairs_mod.validate_images
+    """Fresh-interpreter import in both orders (no circular import). A subprocess is used because
+    ``importlib.reload`` would replace the module's classes and break the other tests' module-scoped
+    fixtures (``isinstance`` against a reloaded ``Manifest``)."""
+    import subprocess, sys
+    for code in ("import faceeval.evaluation.split_manifest as S, faceeval.evaluation.pairs as P",
+                 "import faceeval.evaluation.pairs as P, faceeval.evaluation.split_manifest as S",
+                 "import faceeval.evaluation.split_manifest as S; import faceeval.evaluation.pairs as P; "
+                 "assert S.validate_images is P.validate_images"):
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                           cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        assert r.returncode == 0, r.stderr
     a = S.build_manifest({p: table(p[:2], S.V1_IDENTITIES[p], S.V1_IMAGES[p]) for p in S.PARTITIONS}, META)
     b = S.build_manifest({p: table(p[:2], S.V1_IDENTITIES[p], S.V1_IMAGES[p]) for p in S.PARTITIONS}, META)
     assert S.manifest_sha256(a) == S.manifest_sha256(b)
+
+
+# ------------------------------------------------------------------ sidecar filename binding
+def test_sidecar_filename_must_match_the_manifest_being_loaded(man, tmp_path):
+    path = tmp_path / "m.txt"
+    sha = S.write_manifest(man, str(path))
+    assert (tmp_path / "m.txt.sha256").read_text() == f"{sha}  m.txt\n"
+    assert S.load_manifest(str(path)) == man                                  # matching name loads
+    (tmp_path / "m.txt.sha256").write_text(f"{sha}  other.txt\n")            # correct digest, wrong recorded name
+    with pytest.raises(S.ManifestAcceptanceError, match="bound to the file name 'other.txt'"):
+        S.load_manifest(str(path))
+    (tmp_path / "m.txt.sha256").write_text(f"{sha}  m.txt\n")                # restored: loads again
+    assert S.load_manifest(str(path)) == man
+
+
+def test_sidecar_name_is_compared_exactly_not_by_path_or_case(man, tmp_path):
+    path = tmp_path / "m.txt"
+    sha = S.write_manifest(man, str(path))
+    for recorded in ("M.TXT", "m.txt ", " m.txt", "./m.txt", "sub/m.txt", "m.txt.sha256"):
+        (tmp_path / "m.txt.sha256").write_text(f"{sha}  {recorded}\n")
+        with pytest.raises(S.ManifestAcceptanceError):
+            S.load_manifest(str(path))
+
+
+def test_renamed_manifest_with_its_original_sidecar_is_rejected_until_both_are_renamed(man, tmp_path):
+    S.write_manifest(man, str(tmp_path / "m.txt"))
+    os.rename(tmp_path / "m.txt", tmp_path / "n.txt")
+    os.rename(tmp_path / "m.txt.sha256", tmp_path / "n.txt.sha256")           # sidecar still says m.txt
+    with pytest.raises(S.ManifestAcceptanceError, match="bound to the file name 'm.txt'"):
+        S.load_manifest(str(tmp_path / "n.txt"))
+
+
+@pytest.mark.parametrize("name", ["a\nb.txt", "a\rb.txt", "line1\r\nline2.txt", "\n.txt"])
+def test_writer_rejects_names_its_own_sidecar_parser_cannot_read(man, tmp_path, name):
+    with pytest.raises(ValueError, match="CR or LF"):
+        S.write_manifest(man, str(tmp_path / name))
+    assert _listing(tmp_path) == []                                            # nothing created
+
+
+@pytest.mark.parametrize("name", ["my manifest (1).txt", "tab\tname.txt", "ünï ç.txt", "-dash.txt", "a=b|c.txt"])
+def test_writer_and_loader_agree_on_unusual_but_legal_names(man, tmp_path, name):
+    sha = S.write_manifest(man, str(tmp_path / name))
+    assert S.manifest_sha256(S.load_manifest(str(tmp_path / name))) == sha

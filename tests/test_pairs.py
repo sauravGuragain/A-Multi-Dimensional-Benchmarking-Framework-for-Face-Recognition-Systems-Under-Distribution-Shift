@@ -477,7 +477,9 @@ def test_sort_images_handles_large_tables_and_reports_duplicates():
 
 
 def test_cross_batch_duplicates_are_rejected(monkeypatch):
-    """Duplicate check must span batches (assumption A4)."""
+    """Uniqueness of GENERATED impostor pairs across sampling batches (assumption A4, BATCH shrunk to 4).
+    This is not an input-validation test; duplicate INPUT records are covered by
+    ``test_duplicate_input_records_far_apart_are_rejected``."""
     monkeypatch.setattr(P, "BATCH", 4)
     imgs = P.sort_images([(f"i{a}", f"{b}") for a in range(3) for b in range(2)])
     pool = P.build_impostor_pool(imgs, 5, 1, P.count_valid_impostor_pairs(imgs))
@@ -852,3 +854,19 @@ def test_diagnostics_match_revision_4_1_section_3_8(which, spec_pool, spec_gen, 
     # (the balanced subset is a uniform G-subset of the pool, so it inherits the pool's skew)
     # genuine cap bounds every identity at cap/G of genuine pairs
     assert d["genuine_max_endpoints"] <= 2 * 10
+
+
+@pytest.mark.parametrize("entry", ["sort_images", "build_pairs", "build_fold0_pairs"])
+def test_duplicate_input_records_far_apart_are_rejected(entry):
+    """The same (identity, image_id) record occurs twice in the INPUT, at positions 5 and 70,000: more than
+    one sampling batch (65,536) apart, with the list not in sorted order."""
+    rows = [(f"id{i // 3:05d}", f"im{i % 3}") for i in range(70_000)]
+    dup = rows + [rows[5]]
+    positions = [i for i, r in enumerate(dup) if r == rows[5]]
+    assert positions == [5, 70_000] and positions[1] - positions[0] > P.BATCH
+    assert dup != sorted(dup)
+    calls = {"sort_images": lambda t: P.sort_images(t), "build_pairs": lambda t: P.build_pairs(t),
+             "build_fold0_pairs": lambda t: P.build_fold0_pairs(t, 1)}
+    with pytest.raises(ValueError, match="duplicate"):
+        calls[entry](dup)
+    assert len(P.sort_images(rows)) == 70_000                                # control: duplicate-free table accepted

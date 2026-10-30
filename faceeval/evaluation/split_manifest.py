@@ -219,6 +219,8 @@ def write_manifest(m: Manifest, path: str) -> str:
             raise FileExistsError(errno.EEXIST, "refusing to overwrite", p)
     directory = os.path.dirname(os.path.abspath(path))
     base = os.path.basename(path)
+    if "\n" in base or "\r" in base:           # the sidecar line "<sha>  <name>\n" could not be parsed back
+        raise ValueError(f"manifest file name must not contain CR or LF: {base!r}")
     sidecar_data = f"{sha}  {base}\n".encode("utf-8")
     tmps: List[str] = []
     published: List[Tuple[str, str]] = []
@@ -296,6 +298,8 @@ def load_manifest(path: str, expected_sha256: Optional[str] = None,
     sha = hashlib.sha256(data).hexdigest()
     if sm.group(1) != sha:
         _fail(f"manifest bytes hash to {sha}, sidecar says {sm.group(1)}")
+    if sm.group(2) != os.path.basename(path):
+        _fail(f"sidecar is bound to the file name {sm.group(2)!r}, not {os.path.basename(path)!r}")
     if expected_sha256 is not None and expected_sha256 != sha:
         _fail(f"manifest hash {sha} differs from the expected {expected_sha256}")
     if b"\r" in data:
