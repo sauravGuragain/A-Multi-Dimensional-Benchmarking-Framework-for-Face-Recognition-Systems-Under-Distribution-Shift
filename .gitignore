@@ -17,7 +17,7 @@ env/
 # Experiment artifacts (generated, not source)
 experiments/
 reports/
-data/
+/data/
 *.db
 *.sqlite3
 mlruns/
