@@ -195,6 +195,22 @@ class FisherfacesRecognizer(TraditionalRecognizerMixin):
         logger.info("[%s] Trained — PCA:%d → LDA:%d → SVM, %d subjects",
                     self.MODEL_NAME, n_pca, n_lda, n_classes)
 
+    def fit_embedding(self, X_train, y_train):  # type: ignore[override]
+        from sklearn.decomposition import PCA
+        from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
+        self._class_labels = sorted(set(y_train))
+        n_classes = len(self._class_labels)
+        X_flat = self._flatten_batch(X_train)
+        n_pca = min(self._n_pca or X_flat.shape[0] - 1, X_flat.shape[0] - 1, X_flat.shape[1])
+        self._extractor = PCA(n_components=n_pca, whiten=True)
+        X_pca = self._extractor.fit_transform(X_flat)
+        n_lda = min(self._n_lda or n_classes - 1, n_classes - 1, X_pca.shape[1])
+        self._lda = LinearDiscriminantAnalysis(n_components=n_lda)
+        self._lda.fit(X_pca, y_train)
+        self.EMBEDDING_DIM = n_lda
+        self._is_trained = True
+
     def _transform(self, X_flat):  # type: ignore[override]
         X_pca = self._extractor.transform(X_flat)
         return self._lda.transform(X_pca)

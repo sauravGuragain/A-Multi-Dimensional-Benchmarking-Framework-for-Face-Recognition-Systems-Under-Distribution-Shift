@@ -13,6 +13,7 @@ from faceeval.core.types import (
     ModelName,
     PerturbationType,
 )
+from faceeval.evaluation.metrics import trapezoid
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ def _compute_auc(points: list[ADCPoint], n_classes: int | None) -> float:
     severities = severities[order]
     accuracies = accuracies[order]
 
-    raw_auc = float(np.trapz(accuracies, severities))
+    raw_auc = float(trapezoid(accuracies, severities))
 
     if n_classes is not None and n_classes > 1:
         chance = 1.0 / n_classes

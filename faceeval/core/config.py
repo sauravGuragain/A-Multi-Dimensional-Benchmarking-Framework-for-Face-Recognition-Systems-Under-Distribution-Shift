@@ -95,6 +95,17 @@ class _ExperimentConfigSchema(BaseModel):
     test_fraction: float = Field(default=0.3, ge=0.0, lt=1.0)
     val_fraction: float = Field(default=0.1, ge=0.0, lt=1.0)
     k_folds: int | None = Field(default=None, ge=2)
+    evaluation_protocol: str = "identification"
+    require_real_models: bool = False
+    allow_partial_results: bool = False
+
+    @field_validator("evaluation_protocol")
+    @classmethod
+    def _check_protocol(cls, v: str) -> str:
+        allowed = ("identification", "lfw_fold0_verification", "both")
+        if v not in allowed:
+            raise ValueError(f"evaluation_protocol must be one of {allowed}, got {v!r}")
+        return v
 
     # Models
     traditional_models: list[str] = Field(default_factory=list)
@@ -313,6 +324,9 @@ class ConfigLoader:
             test_fraction=schema.test_fraction,
             val_fraction=schema.val_fraction,
             k_folds=schema.k_folds,
+            evaluation_protocol=schema.evaluation_protocol,
+            require_real_models=schema.require_real_models,
+            allow_partial_results=schema.allow_partial_results,
             traditional_models=[
                 TraditionalModelType(m) for m in schema.traditional_models
             ],

@@ -97,20 +97,30 @@ class InsightFaceRecognizer(DeepRecognizerBase):
         self._providers = providers or ["CUDAExecutionProvider", "CPUExecutionProvider"]
         self._batch_size = batch_size
 
+    REAL_BACKBONE_TYPES = ("_InsightFaceEmbedder",)
+
     def _load_backbone(self) -> None:
         try:
             import insightface
             logger.info("[%s] Loading InsightFace pack '%s' …",
                         self.MODEL_NAME, self._model_pack)
-            app = insightface.app.FaceAnalysis(
-                name=self._model_pack,
-                providers=self._providers,
-            )
-            app.prepare(ctx_id=0 if "CUDA" in self._providers[0] else -1)
+            def build():
+                app = insightface.app.FaceAnalysis(
+                    name=self._model_pack, providers=self._providers)
+                app.prepare(ctx_id=0 if "CUDA" in self._providers[0] else -1)
+                return app
+            try:
+                app = build()
+            except Exception:
+                # Some packs (e.g. antelopev2) unzip into <pack>/<pack>/*.onnx and loading fails in
+                # the constructor or in prepare(). Flatten the nested folder once and retry.
+                if not _flatten_nested_pack(self._model_pack):
+                    raise
+                app = build()
             self._backbone = _InsightFaceEmbedder(app, self.EMBEDDING_DIM)
         except Exception as exc:
             logger.warning(
-                "[%s] InsightFace load failed (%s). Using stub.", self.MODEL_NAME, exc
+                "[%s] InsightFace load failed (%r). Using stub.", self.MODEL_NAME, exc
             )
             self._backbone = _EmbeddingStub(self.EMBEDDING_DIM, salt=42)
 
@@ -120,19 +130,46 @@ class InsightFaceRecognizer(DeepRecognizerBase):
         return self._backbone.embed(X)
 
 
+def _flatten_nested_pack(pack: str, root: str = "~/.insightface/models") -> bool:
+    """Move ``<root>/<pack>/<pack>/*.onnx`` up one level. True if anything was moved.
+
+    Acts only on that exact layout, moves only ``.onnx`` files and never overwrites (or follows a
+    symlink at) an existing destination, so a partly repaired pack is completed, not clobbered.
+    """
+    import glob
+    import os
+    import shutil
+    base = os.path.join(os.path.expanduser(root), pack)
+    nested = os.path.join(base, pack)
+    if not os.path.isdir(nested):
+        return False
+    moved = False
+    for src in glob.glob(os.path.join(nested, "*.onnx")):
+        dst = os.path.join(base, os.path.basename(src))
+        if os.path.isfile(src) and not os.path.lexists(dst):
+            shutil.move(src, dst)
+            moved = True
+    return moved
+
+
 class _InsightFaceEmbedder:
     def __init__(self, app: Any, dim: int) -> None:
         self._app = app
         self._dim = dim
+        self.n_total = 0
+        self.n_detector_miss = 0     # detector found no face -> zero embedding (failure to acquire)
 
     def embed(self, X: list[np.ndarray]) -> np.ndarray:
         embeddings: list[np.ndarray] = []
         for face_arr in X:
             if face_arr.dtype != np.uint8:
-                bgr = (face_arr * 128.0 + 127.5).clip(0, 255).astype(np.uint8)
+                bgr = np.rint(face_arr * 128.0 + 127.5).clip(0, 255).astype(np.uint8)
             else:
                 bgr = face_arr
+            self.n_total += 1
             faces = self._app.get(bgr)
+            if not faces:
+                self.n_detector_miss += 1
             emb = faces[0].embedding.astype(np.float32) if faces else np.zeros(self._dim, dtype=np.float32)
             norm = np.linalg.norm(emb)
             embeddings.append(emb / norm if norm > 0 else emb)
@@ -187,6 +224,8 @@ class DlibFaceRecognizer(DeepRecognizerBase):
         self._model_path = model_path
         self._face_rec_model: Any = None
         self._shape_predictor: Any = None
+
+    REAL_BACKBONE_TYPES = ("_DlibEmbedder",)
 
     def _load_backbone(self) -> None:
         try:

@@ -96,6 +96,16 @@ class BaseRecognizer(ABC):
         """
         ...
 
+    def fit_embedding(self, X_train: list[np.ndarray], y_train: list[SubjectID]) -> None:
+        """
+        Prepare the model for ``extract_features`` only (verification protocol).
+
+        Default: full ``fit``.  Models whose classifier head is irrelevant to
+        embeddings (and expensive with thousands of identities) override this
+        to fit just the feature extractor.
+        """
+        self.fit(X_train, y_train)
+
     @abstractmethod
     def extract_features(self, X: list[np.ndarray]) -> list[EmbeddingVector]:
         """

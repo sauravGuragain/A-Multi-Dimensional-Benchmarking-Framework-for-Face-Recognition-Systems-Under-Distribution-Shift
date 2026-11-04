@@ -220,6 +220,36 @@ class DeepRecognizerBase(BaseRecognizer):
                            emb_b / (np.linalg.norm(emb_b) + 1e-8)))
         return sim >= self._decision_threshold, sim
 
+    def fit_embedding(self, X_train: list[np.ndarray], y_train: list[SubjectID]) -> None:
+        """Frozen pretrained backbone: nothing to fit for embedding extraction."""
+        if self._backbone is None:
+            self._load_backbone()
+        self._class_labels = sorted(set(y_train))
+        self._is_trained = True
+
+    # Class names of the genuine pretrained backbone objects this model loads.
+    # Anything else (stub fallback, unknown type) is NOT accepted as real.
+    REAL_BACKBONE_TYPES: tuple[str, ...] = ()
+
+    def is_real_backbone(self) -> bool:
+        """True only for a genuine pretrained backbone (allow-list, not a name blacklist)."""
+        if self._backbone is None:
+            self._load_backbone()
+        return type(self._backbone).__name__ in self.REAL_BACKBONE_TYPES
+
+    def is_stub_backbone(self) -> bool:
+        """True when the backbone is a stand-in or is not a genuine pretrained model."""
+        return not self.is_real_backbone()
+
+    def assert_real_backbone(self) -> None:
+        """Raise ``EmbeddingError`` unless the backbone is a genuine pretrained model."""
+        if not self.is_real_backbone():
+            raise EmbeddingError(
+                f"[{self.MODEL_NAME}] real pretrained backbone is unavailable "
+                f"(loaded {type(self._backbone).__name__}). Install the model "
+                "dependencies/weights or set require_real_models: false."
+            )
+
     def extract_features(self, X: list[np.ndarray]) -> list[EmbeddingVector]:
         if self._backbone is None:
             self._load_backbone()

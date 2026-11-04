@@ -853,6 +853,15 @@ class ExperimentConfig:
     test_fraction: float = 0.3
     val_fraction: float = 0.1
     k_folds: int | None = None
+    # Evaluation protocol: "identification" (closed-set, default),
+    # "lfw_fold0_verification" (Fold 0 pair protocol) or "both".
+    evaluation_protocol: str = "identification"
+    # When True, a deep model that would fall back to a random/deterministic
+    # stub backbone aborts the run instead of producing meaningless numbers.
+    require_real_models: bool = False
+    # By default a run with failed models/conditions fails (partial outputs stay on disk).
+    # True keeps the previous behaviour: log the failures and report the run as completed.
+    allow_partial_results: bool = False
 
     # Models
     traditional_models: list[TraditionalModelType] = field(default_factory=list)
