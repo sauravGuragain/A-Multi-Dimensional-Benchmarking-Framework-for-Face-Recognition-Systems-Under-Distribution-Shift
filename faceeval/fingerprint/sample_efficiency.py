@@ -12,6 +12,7 @@ from faceeval.core.types import (
     SampleEfficiencyCurve,
     SubjectID,
 )
+from faceeval.evaluation.metrics import trapezoid
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ def sample_efficiency_auc(curve: SampleEfficiencyCurve) -> float:
         return float(accs.mean())
 
     norm_sizes = (sizes - sizes[0]) / size_range
-    return float(np.trapezoid(accs, norm_sizes))
+    return float(trapezoid(accs, norm_sizes))
 
 
 def sample_efficiency_summary(

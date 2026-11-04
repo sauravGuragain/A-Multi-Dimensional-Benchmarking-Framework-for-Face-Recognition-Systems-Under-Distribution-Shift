@@ -107,6 +107,13 @@ class FaceNetRecognizer(DeepRecognizerBase):
     # DeepRecognizerBase interface
     # ------------------------------------------------------------------
 
+    # facenet-pytorch loads randomly initialised weights unless ``pretrained`` is one of these.
+    REAL_BACKBONE_TYPES = ("InceptionResnetV1",)
+    PRETRAINED_SOURCES = ("vggface2", "casia-webface")
+
+    def is_real_backbone(self) -> bool:
+        return self._pretrained in self.PRETRAINED_SOURCES and super().is_real_backbone()
+
     def _load_backbone(self) -> None:
         if not _check_facenet():
             logger.warning(

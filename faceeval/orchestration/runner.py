@@ -10,6 +10,7 @@ import numpy as np
 
 from faceeval.core.exceptions import OrchestratorError
 from faceeval.core.registry import model_registry, perturbation_registry
+from faceeval.orchestration.perturbed_inputs import needs_chips, perturb_batch
 from faceeval.core.types import (
     BehavioralFingerprint,
     DataSplit,
@@ -51,6 +52,9 @@ class ExperimentRunner:
         self._config = config
         self._cb = progress_callback or (lambda stage, done, total: None)
         self._run: ExperimentRun | None = None
+        self.verification_summary: dict | None = None
+        self._preflight_kept: dict = {}   # at most one preflight-loaded model, reused by its first user
+        self.failures: list[dict] = []   # failed models/conditions (see _raise_if_failures)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -151,6 +155,7 @@ class ExperimentRunner:
         self._cb("data", 0, 1)
         records, raw_images = self._load_or_generate_data()
         self._cb("data", 1, 1)
+        protocol = getattr(config, "evaluation_protocol", "identification")
 
         splitter = DatasetSplitter(
             seed=config.random_seed,
@@ -166,14 +171,23 @@ class ExperimentRunner:
         # verification benchmarks, not for the identification metrics this
         # runner reports. See faceeval.data.splitter module docstring.
         dataset_name = config.dataset_names[0] if config.dataset_names else "synthetic"
-        split = splitter.split(records, config.split_strategy, dataset_name=dataset_name)
+        run_identification = protocol in ("identification", "both")
+        run_verification = protocol in ("lfw_fold0_verification", "both")
+        if run_verification:
+            if dataset_name != "lfw":
+                raise OrchestratorError(
+                    "evaluation_protocol requires dataset_names: [lfw] "
+                    f"(got {config.dataset_names})."
+                )
+        split = (splitter.split(records, config.split_strategy, dataset_name=dataset_name)
+                 if run_identification else None)
 
         records_by_id = {r.image_id: r for r in records}
-        train_records = [records_by_id[i] for i in split.train_ids]
-        test_records = [records_by_id[i] for i in split.test_ids]
+        train_records = [records_by_id[i] for i in split.train_ids] if split else []
+        test_records = [records_by_id[i] for i in split.test_ids] if split else []
         n_classes = len({r.subject_id for r in records})
 
-        if not train_records or not test_records:
+        if run_identification and (not train_records or not test_records):
             raise OrchestratorError(
                 "Synthetic split produced an empty train or test set — "
                 "increase n_subjects in the synthetic data generator."
@@ -209,6 +223,25 @@ class ExperimentRunner:
             + [m.value for m in config.deep_models]
         )
         trad_names = {m.value for m in config.traditional_models}
+        if config.require_real_models:
+            self._preflight_models(model_names, trad_names)
+        if run_verification:
+            from faceeval.orchestration.verification import run_fold0_verification
+            self.verification_summary = run_fold0_verification(
+                config=config, records=records, raw_images=raw_images,
+                model_names=model_names, trad_names=trad_names,
+                composer=composer, specs=all_specs, dataset_name=dataset_name,
+                preprocess=self._preprocess_records,
+                preprocess_chips=self._aligned_chips,
+                adapt_hyperparameters=self._adapt_hyperparameters_to_data_size,
+                progress=self._cb,
+                get_model=self._get_model,
+            )
+            self.failures.extend(self.verification_summary["failures"])
+        if not run_identification:
+            self._raise_if_failures()
+            return
+
         total_conditions = len(model_names) * len(all_specs)
         self._cb("evaluation", 0, total_conditions)
         condition_count = 0
@@ -220,9 +253,15 @@ class ExperimentRunner:
             )
 
             try:
-                model = model_registry.get(model_name)
+                model = self._get_model(model_name)
             except Exception as exc:
+                if config.require_real_models and model_name not in trad_names:
+                    raise OrchestratorError(
+                        f"Model '{model_name}' could not be instantiated and "
+                        f"require_real_models=true: {exc}") from exc
                 logger.warning("Skipping model '%s': could not instantiate (%s)", model_name, exc)
+                self.failures.append({"protocol": "identification", "model": model_name,
+                                      "stage": "instantiate", "error": f"{type(exc).__name__}: {exc}"})
                 condition_count += len(all_specs)
                 self._cb("evaluation", condition_count, total_conditions)
                 continue
@@ -233,10 +272,18 @@ class ExperimentRunner:
             try:
                 X_train = self._preprocess_records(pipeline, train_records, raw_images)
                 y_train = [r.subject_id for r in train_records]
-                X_test_clean = self._preprocess_records(pipeline, test_records, raw_images)
+                test_chips = None
+                if needs_chips(pipeline.normalizer):
+                    # Perturb the aligned uint8 chip, then normalise (see perturbed_inputs).
+                    test_chips = self._aligned_chips(pipeline, test_records, raw_images)
+                    X_test_clean = [pipeline.normalizer.normalize(c) for c in test_chips]
+                else:
+                    X_test_clean = self._preprocess_records(pipeline, test_records, raw_images)
                 y_test = [r.subject_id for r in test_records]
             except Exception as exc:
                 logger.warning("Preprocessing failed for '%s': %s", model_name, exc)
+                self.failures.append({"protocol": "identification", "model": model_name,
+                                      "stage": "preprocess", "error": f"{type(exc).__name__}: {exc}"})
                 condition_count += len(all_specs)
                 self._cb("evaluation", condition_count, total_conditions)
                 continue
@@ -247,9 +294,17 @@ class ExperimentRunner:
                 model.fit(X_train, y_train)
             except Exception as exc:
                 logger.warning("Training failed for '%s': %s", model_name, exc)
+                self.failures.append({"protocol": "identification", "model": model_name,
+                                      "stage": "fit", "error": f"{type(exc).__name__}: {exc}"})
                 condition_count += len(all_specs)
                 self._cb("evaluation", condition_count, total_conditions)
                 continue
+
+            if config.require_real_models and hasattr(model, "assert_real_backbone"):
+                try:
+                    model.assert_real_backbone()
+                except Exception as exc:
+                    raise OrchestratorError(str(exc)) from exc
 
             logger.info("[%s] trained on %d samples, %d test samples.",
                         model_name, len(X_train), len(X_test_clean))
@@ -259,6 +314,7 @@ class ExperimentRunner:
                 try:
                     X_test_perturbed = self._apply_perturbation(
                         composer, spec, test_records, X_test_clean,
+                        normalizer=pipeline.normalizer, chips=test_chips,
                     )
                     predictions = model.predict(X_test_perturbed, perturbation_spec=spec)
                     metrics = compute_identification_metrics(
@@ -310,6 +366,8 @@ class ExperimentRunner:
                     logger.warning(
                         "Condition %s/%s failed: %s", model_name, spec.label, exc
                     )
+                    self.failures.append({"protocol": "identification", "model": model_name,
+                                          "stage": spec.label, "error": f"{type(exc).__name__}: {exc}"})
 
                 condition_count += 1
                 self._cb("evaluation", condition_count, total_conditions)
@@ -318,6 +376,46 @@ class ExperimentRunner:
             "Evaluation loop complete: %d real conditions recorded.",
             len(run.evaluation_results),
         )
+        self._raise_if_failures()
+
+    def _raise_if_failures(self) -> None:
+        """A run with failed models/conditions must not be reported as successful."""
+        if not self.failures or self._config.allow_partial_results:
+            if self.failures:
+                logger.error("%d model/condition failure(s) ignored (allow_partial_results=true).",
+                             len(self.failures))
+            return
+        head = "; ".join(f"{f['protocol']}:{f['model']}:{f['stage']}: {f['error']}"
+                         for f in self.failures[:5])
+        raise OrchestratorError(
+            f"{len(self.failures)} model/condition failure(s); partial outputs were kept on disk. "
+            f"First: {head}. Set allow_partial_results: true to accept partial results."
+        )
+
+    def _get_model(self, name: str):
+        """Registry instance; hands out the preflight-loaded model once instead of reloading it."""
+        kept = self._preflight_kept.pop(name, None)
+        return kept if kept is not None else model_registry.get(name)
+
+    def _preflight_models(self, model_names: list, trad_names: set) -> None:
+        """Load every deep model once, before any expensive work, and require a real backbone."""
+        import gc
+        deep = [n for n in model_names if n not in trad_names]
+        # Check in reverse so the model still held at the end is the first one evaluated: it is
+        # reused instead of loaded twice. Only one model is ever held (no extra memory).
+        for name in reversed(deep):
+            self._preflight_kept.clear()
+            gc.collect()
+            try:
+                model = model_registry.get(name)
+                if hasattr(model, "assert_real_backbone"):
+                    model.assert_real_backbone()
+            except Exception as exc:
+                raise OrchestratorError(
+                    f"Preflight failed for '{name}' (require_real_models=true): {exc}") from exc
+            self._preflight_kept[name] = model
+            del model
+            logger.info("Preflight OK: '%s' has a real pretrained backbone.", name)
 
     def _load_or_generate_data(self) -> tuple[list, dict]:
         """
@@ -402,15 +500,15 @@ class ExperimentRunner:
         )
 
     @staticmethod
-    def _preprocess_records(pipeline, records, raw_images: dict) -> list:
+    def _aligned_chips(pipeline, records, raw_images: dict) -> list:
         """
-        Run the preprocessing pipeline on a list of records.
+        Load, detect and align every record; return uint8 BGR face chips (not normalised).
 
         - Synthetic: raw_images dict contains pre-loaded pixels; use directly.
         - LFW/real: raw_images is None; use disk-based pixel loading via cv2.imread.
         """
         import cv2
-        processed = []
+        chips = []
         for rec in records:
             # Synthetic path: in-memory pixel data
             if raw_images is not None:
@@ -419,8 +517,7 @@ class ExperimentRunner:
                 aligned = pipeline.aligner.align(img_bgr, detection)
                 if aligned is None:
                     raise RuntimeError(f"Alignment failed for synthetic image '{rec.image_id}'")
-                normalised = pipeline.normalizer.normalize(aligned.image)
-                processed.append(normalised)
+                chips.append(aligned.image)
             # LFW/real path: disk-based pixel loading via pipeline
             else:
                 img_bgr = cv2.imread(rec.image_path)
@@ -433,15 +530,24 @@ class ExperimentRunner:
                 aligned = pipeline.aligner.align(img_bgr, detection)
                 if aligned is None:
                     raise RuntimeError(f"Alignment failed for image '{rec.image_path}'")
-                normalised = pipeline.normalizer.normalize(aligned.image)
-                processed.append(normalised)
-        return processed
+                chips.append(aligned.image)
+        return chips
 
     @staticmethod
-    def _apply_perturbation(composer, spec, records, clean_arrays: list) -> list:
-        """Apply one PerturbationSpec to every array in a preprocessed batch."""
-        perturbation = composer._get_perturbation(spec.perturbation_type)
-        return [perturbation.apply(arr, spec.severity) for arr in clean_arrays]
+    def _preprocess_records(pipeline, records, raw_images: dict) -> list:
+        """Run the preprocessing pipeline (align, then normalise) on a list of records."""
+        chips = ExperimentRunner._aligned_chips(pipeline, records, raw_images)
+        return [pipeline.normalizer.normalize(chip) for chip in chips]
+
+    @staticmethod
+    def _apply_perturbation(composer, spec, records, clean_arrays: list,
+                            normalizer=None, chips=None) -> list:
+        """Apply one PerturbationSpec to a preprocessed batch.
+
+        When ``chips`` (uint8 aligned faces) are given, the perturbation is applied to the
+        chip and the result normalised; otherwise it is applied to ``clean_arrays`` directly.
+        """
+        return perturb_batch(composer, spec, normalizer, clean_arrays, chips)
 
     @staticmethod
     def _adapt_hyperparameters_to_data_size(model, model_name: str, n_train: int) -> None:

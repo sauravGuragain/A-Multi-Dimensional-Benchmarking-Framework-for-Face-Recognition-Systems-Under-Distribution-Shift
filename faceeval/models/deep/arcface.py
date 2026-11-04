@@ -104,6 +104,12 @@ class ArcFaceRecognizer(DeepRecognizerBase):
         self._batch_size = batch_size
         self._recognizer: Any = None   # insightface FaceAnalysis or direct model
 
+    REAL_BACKBONE_TYPES = ("_InsightFaceWrapper",)
+    # Detector misses return a zero embedding (a failure-to-acquire, scored as a non-match) so a
+    # model never mixes detector-based and direct-crop embeddings. True embeds the crop directly
+    # instead (different embedding path: opt-in only).
+    CROP_FALLBACK = False
+
     def _load_backbone(self) -> None:
         if not _check_insightface():
             logger.warning(
@@ -126,7 +132,7 @@ class ArcFaceRecognizer(DeepRecognizerBase):
                 providers=self._providers,
             )
             app.prepare(ctx_id=0 if "CUDA" in self._providers[0] else -1)
-            self._backbone = _InsightFaceWrapper(app)
+            self._backbone = _InsightFaceWrapper(app, crop_fallback=self.CROP_FALLBACK)
         except Exception as exc:
             logger.warning(
                 "[%s] Could not load '%s': %s. Falling back to stub.",
@@ -149,25 +155,46 @@ class ArcFaceRecognizer(DeepRecognizerBase):
 class _InsightFaceWrapper:
     """Wraps insightface FaceAnalysis to produce embedding vectors."""
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, crop_fallback: bool = False) -> None:
         self._app = app
+        self._crop_fallback = crop_fallback
+        self.n_total = 0
+        self.n_detector_miss = 0     # detector found no face
+        self.n_failed = 0            # zero embeddings returned (detector miss without fallback)
+
+    def _embed_crop(self, bgr: np.ndarray) -> np.ndarray | None:
+        """Run the recognition network directly on an already-cropped face (112x112 BGR)."""
+        import cv2
+        rec = getattr(self._app, "models", {}).get("recognition")
+        if rec is None:
+            return None
+        # get_feat() takes uint8 BGR images, resizes to the model input size and
+        # applies the model's own mean/std with BGR->RGB swap (swapRB=True).
+        size = tuple(int(v) for v in rec.input_size)          # (w, h) = (112, 112)
+        crop = np.ascontiguousarray(cv2.resize(bgr, size), dtype=np.uint8)
+        feat = np.asarray(rec.get_feat([crop]), dtype=np.float32).reshape(-1)
+        return feat if np.isfinite(feat).all() else None
 
     def embed(self, X: list[np.ndarray]) -> np.ndarray:
-        import cv2
         embeddings: list[np.ndarray] = []
         for face_arr in X:
             # Convert float32 normalised → uint8 BGR for insightface detection
             if face_arr.dtype != np.uint8:
-                bgr = (face_arr * 128.0 + 127.5).clip(0, 255).astype(np.uint8)
+                bgr = np.rint(face_arr * 128.0 + 127.5).clip(0, 255).astype(np.uint8)
             else:
                 bgr = face_arr
 
+            self.n_total += 1
             faces = self._app.get(bgr)
             if faces:
                 emb = faces[0].embedding.astype(np.float32)
             else:
-                # Fallback: zero embedding (will lower similarity scores)
-                emb = np.zeros(512, dtype=np.float32)
+                self.n_detector_miss += 1
+                emb = self._embed_crop(bgr) if self._crop_fallback else None
+                if emb is None:
+                    # Failure to acquire: zero embedding -> cosine 0 with everything.
+                    self.n_failed += 1
+                    emb = np.zeros(512, dtype=np.float32)
 
             norm = np.linalg.norm(emb)
             embeddings.append(emb / norm if norm > 0 else emb)

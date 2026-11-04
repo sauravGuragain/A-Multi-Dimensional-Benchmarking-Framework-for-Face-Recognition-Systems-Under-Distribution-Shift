@@ -137,6 +137,15 @@ class TraditionalRecognizerMixin(BaseRecognizer):
             ))
         return results
 
+    def fit_embedding(self, X_train: list[np.ndarray], y_train: list[SubjectID]) -> None:
+        """Fit only the feature extractor (no classifier head); stateless models just mark trained."""
+        self._class_labels = sorted(set(y_train))
+        extractor = self._build_extractor()
+        if extractor is not None:
+            extractor.fit(self._flatten_batch(X_train))
+            self._extractor = extractor
+        self._is_trained = True
+
     def extract_features(self, X: list[np.ndarray]) -> list[EmbeddingVector]:
         self._require_trained()
         X_flat = self._flatten_batch(X)

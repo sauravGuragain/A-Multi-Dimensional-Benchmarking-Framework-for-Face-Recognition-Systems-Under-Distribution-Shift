@@ -20,6 +20,11 @@ from faceeval.core.types import (
 
 logger = logging.getLogger(__name__)
 
+# ``np.trapezoid`` exists only in NumPy >= 2.0; ``np.trapz`` (same algorithm) is the
+# NumPy 1.x name and was removed in newer 2.x releases. The project supports numpy>=1.24.
+trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
+
 # Minimum samples required before computing metrics
 _MIN_SAMPLES = 4
 
@@ -221,10 +226,18 @@ def compute_verification_metrics(
         frrs.append(float(frr))
 
     # --- AUC (trapezoidal integration, sort by fpr) ---
-    sorted_pairs = sorted(zip(fprs, tprs))
-    sorted_fprs = [p[0] for p in sorted_pairs]
-    sorted_tprs = [p[1] for p in sorted_pairs]
-    auc = float(np.trapezoid(sorted_tprs, sorted_fprs))
+    # The sweep's strictest threshold is the maximum score, which still accepts the
+    # top-scoring (and any tied) pairs. Anchor the curve at (0, 0) -- the "accept
+    # nothing" operating point -- so the ROC always starts at the origin; otherwise
+    # fully tied scores (a single point at (1, 1)) integrate to AUC 0 instead of 0.5.
+    roc_thresholds = [float(np.nextafter(scores.max(), np.inf))] + thresholds.tolist()
+    roc_fprs = [0.0] + fprs
+    roc_tprs = [0.0] + tprs
+    sorted_points = sorted(zip(roc_fprs, roc_tprs, roc_thresholds))   # thresholds stay with their points
+    sorted_fprs = [p[0] for p in sorted_points]
+    sorted_tprs = [p[1] for p in sorted_points]
+    sorted_thresholds = [p[2] for p in sorted_points]
+    auc = float(trapezoid(sorted_tprs, sorted_fprs))
 
     # --- EER: linear interpolation where FAR == FRR ---
     eer, eer_thresh = _compute_eer(fars, frrs, thresholds.tolist())
@@ -233,9 +246,7 @@ def compute_verification_metrics(
     roc_curve = ROCCurve(
         fpr=sorted_fprs,
         tpr=sorted_tprs,
-        thresholds=[t for _, t in sorted(
-            zip(fprs, thresholds.tolist()), key=lambda x: x[0]
-        )],
+        thresholds=sorted_thresholds,
         auc=auc,
     )
 
@@ -385,7 +396,7 @@ def _compute_pr_curve(
         precisions.append(float(p))
         recalls.append(float(r))
 
-    ap = float(np.trapezoid(precisions, recalls)) if len(recalls) > 1 else 0.0
+    ap = float(trapezoid(precisions, recalls)) if len(recalls) > 1 else 0.0
     return {
         "precision": precisions,
         "recall": recalls,
@@ -446,4 +457,4 @@ def compute_degradation_auc(
     items = sorted(accuracy_by_severity.items())
     severities = [s for s, _ in items]
     accs = [a for _, a in items]
-    return float(np.trapezoid(accs, severities))
+    return float(trapezoid(accs, severities))
