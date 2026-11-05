@@ -69,7 +69,7 @@ class JPEGCompression(BasePerturbation):
         if len(image.shape) == 2 and len(decoded.shape) == 3:
             decoded = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY)
 
-        return self._restore_dtype(decoded, image)
+        return self._from_unit(decoded.astype(np.float32) / 255.0, image)
 
 
 # ---------------------------------------------------------------------------
