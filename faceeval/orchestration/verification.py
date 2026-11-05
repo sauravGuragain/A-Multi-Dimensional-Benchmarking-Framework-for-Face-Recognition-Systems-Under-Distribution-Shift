@@ -41,10 +41,13 @@ FOLD_INDEX = 0
 K_FOLDS = 10
 FULL_LFW_IDENTITIES = 5749
 FULL_LFW_IMAGES = 13233
-# Content fingerprints (see ``dataset_fingerprint``) of verified official LFW copies. Counts alone
-# cannot identify a dataset, so the strict full-LFW acceptance checks apply only when the
-# fingerprint is listed here. Empty until a verified copy has been fingerprinted.
-OFFICIAL_LFW_FINGERPRINTS: frozenset[str] = frozenset()
+# Content fingerprints (see ``dataset_fingerprint``) of verified official LFW copies.
+# This fingerprint was independently reproduced from a fresh extraction of the original
+# lfw.tgz archive. The archive SHA-256 is the published scikit-learn LFW checksum:
+# 055f7d9c632d7370e6fb4afc7468d40f970c34a80d4c6f50ffec63f5a8d536c0
+OFFICIAL_LFW_FINGERPRINTS: frozenset[str] = frozenset({
+    "df3e734c6e5033224011c2587fd2c7671ce2f86d499cb57404f50f0d12337230",
+})
 PARTITION_CODE = {"validation": 1, "test": 2}
 FAR_POINTS = [0.001, 0.01, 0.1]
 
