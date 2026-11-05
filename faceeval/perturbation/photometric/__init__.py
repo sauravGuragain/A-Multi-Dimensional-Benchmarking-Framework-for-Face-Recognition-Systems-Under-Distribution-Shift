@@ -58,7 +58,7 @@ class BrightnessPerturbation(BasePerturbation):
     def _apply(self, image: np.ndarray, severity: float) -> np.ndarray:
         shift = self._severity_to_params(severity)["additive_shift"]
         f = self._to_float32(image)
-        return self._restore_dtype(f + shift, image)
+        return self._from_unit(f + shift, image)
 
 
 # ---------------------------------------------------------------------------
@@ -86,11 +86,11 @@ class ContrastPerturbation(BasePerturbation):
         scale = float(np.exp(log_min + severity * (log_max - log_min)))
         return {"scale_factor": round(scale, 5)}
 
-    def _apply(self, image: np.ndarray, severity: float) -> dict[str, Any]:  # type: ignore[override]
+    def _apply(self, image: np.ndarray, severity: float) -> np.ndarray:
         scale = self._severity_to_params(severity)["scale_factor"]
         f = self._to_float32(image)
         mean = f.mean()
-        return self._restore_dtype(mean + scale * (f - mean), image)
+        return self._from_unit(mean + scale * (f - mean), image)
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +124,7 @@ class GammaPerturbation(BasePerturbation):
         gamma = self._severity_to_params(severity)["gamma"]
         f = self._to_float32(image).clip(0.0, 1.0)
         corrected = np.power(f, gamma)
-        return self._restore_dtype(corrected, image)
+        return self._from_unit(corrected, image)
 
 
 # ---------------------------------------------------------------------------

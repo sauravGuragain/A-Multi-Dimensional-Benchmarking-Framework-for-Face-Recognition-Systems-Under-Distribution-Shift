@@ -156,7 +156,17 @@ class BasePerturbation(ABC):
         return image.astype(np.float32)
 
     @staticmethod
+    def _from_unit(result: np.ndarray, original: np.ndarray) -> np.ndarray:
+        """Inverse of ``_to_float32``: map a [0, 1]-scale result back to ``original``'s dtype and range."""
+        result = np.clip(result, 0.0, 1.0)
+        if original.dtype == np.uint8:
+            return np.rint(result * 255.0).astype(np.uint8)
+        return result.astype(original.dtype)
+
+    @staticmethod
     def _restore_dtype(result: np.ndarray, original: np.ndarray) -> np.ndarray:
+        """Cast ``result`` to ``original``'s dtype. ``result`` must already be in ``original``'s value range
+        (use ``_from_unit`` for a [0, 1]-scale result from ``_to_float32``)."""
         if original.dtype == np.uint8:
             return result.clip(0, 255).astype(np.uint8)
         if original.dtype == np.float32:

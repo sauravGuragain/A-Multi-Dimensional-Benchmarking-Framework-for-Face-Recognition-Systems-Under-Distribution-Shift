@@ -43,7 +43,7 @@ class GaussianNoise(BasePerturbation):
         rng = np.random.default_rng(_SEED)
         f = self._to_float32(image)
         noise = rng.normal(0.0, std, f.shape).astype(np.float32)
-        return self._restore_dtype(f + noise, image)
+        return self._from_unit(f + noise, image)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ class SpeckleNoise(BasePerturbation):
         rng = np.random.default_rng(_SEED)
         f = self._to_float32(image)
         speckle = rng.normal(0.0, variance ** 0.5, f.shape).astype(np.float32)
-        return self._restore_dtype(f + f * speckle, image)
+        return self._from_unit(f + f * speckle, image)
 
 
 # ---------------------------------------------------------------------------
