@@ -12,15 +12,34 @@ Speckle noise   : severity → variance [0, 0.15] (multiplicative noise variance
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import numpy as np
 
 from faceeval.core.registry import register_perturbation
 from faceeval.core.types import PerturbationCategory, PerturbationType
-from faceeval.perturbation.base import BasePerturbation
+from faceeval.perturbation.base import BasePerturbation, current_image_id
 
-_SEED = 0   # fixed seed so the same (image, severity) always yields the same noise
+# Per-image noise seeding. seed = SHA-256(master seed | image id | perturbation type); severity is NOT part of
+# the seed, so an image's noise pattern is the same at every severity (scaled by severity). Changing
+# NOISE_MASTER_SEED changes every noise realisation and must be treated as a protocol change.
+NOISE_MASTER_SEED = 42
+
+
+def noise_seed(image_id: str, perturbation_type: str) -> int:
+    """Deterministic 64-bit seed for one (image id, perturbation type); the same on every platform and run."""
+    key = f"{NOISE_MASTER_SEED}|{image_id.replace(chr(92), '/')}|{perturbation_type}"
+    return int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:8], "big")
+
+
+def _noise_rng(perturbation_type: PerturbationType, image: np.ndarray) -> np.random.Generator:
+    image_id = current_image_id()
+    if image_id is None:
+        # shortcut: ad-hoc callers without an id are seeded from the pixel content (still independent per
+        # image and reproducible, but not stable across models/preprocessing); upgrade by passing image_id.
+        image_id = f"content:{image.dtype}:{image.shape}:{hashlib.sha256(np.ascontiguousarray(image).tobytes()).hexdigest()}"
+    return np.random.default_rng(noise_seed(image_id, perturbation_type.value))
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +59,7 @@ class GaussianNoise(BasePerturbation):
 
     def _apply(self, image: np.ndarray, severity: float) -> np.ndarray:
         std = self._severity_to_params(severity)["std_dev"]
-        rng = np.random.default_rng(_SEED)
+        rng = _noise_rng(self.PERTURBATION_TYPE, image)
         f = self._to_float32(image)
         noise = rng.normal(0.0, std, f.shape).astype(np.float32)
         return self._from_unit(f + noise, image)
@@ -63,7 +82,7 @@ class SaltPepperNoise(BasePerturbation):
 
     def _apply(self, image: np.ndarray, severity: float) -> np.ndarray:
         density = self._severity_to_params(severity)["density"]
-        rng = np.random.default_rng(_SEED)
+        rng = _noise_rng(self.PERTURBATION_TYPE, image)
         out = image.copy()
         mask = rng.random(image.shape[:2])
         salt_mask   = mask < density / 2
@@ -95,7 +114,7 @@ class SpeckleNoise(BasePerturbation):
 
     def _apply(self, image: np.ndarray, severity: float) -> np.ndarray:
         variance = self._severity_to_params(severity)["variance"]
-        rng = np.random.default_rng(_SEED)
+        rng = _noise_rng(self.PERTURBATION_TYPE, image)
         f = self._to_float32(image)
         speckle = rng.normal(0.0, variance ** 0.5, f.shape).astype(np.float32)
         return self._from_unit(f + f * speckle, image)

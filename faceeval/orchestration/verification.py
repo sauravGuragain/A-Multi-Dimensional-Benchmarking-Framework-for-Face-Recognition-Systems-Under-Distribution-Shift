@@ -34,6 +34,7 @@ from faceeval.evaluation import pairs as pairs_mod
 from faceeval.evaluation import split_manifest as sm
 from faceeval.evaluation.metrics import compute_verification_metrics
 from faceeval.orchestration.perturbed_inputs import needs_chips, perturb_batch
+from faceeval.perturbation import noise as _noise
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,28 @@ FAR_POINTS = [0.001, 0.01, 0.1]
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+# SHA-256 of the reviewed per-image noise-seeding patch (per_image_noise_seeding.patch). It identifies the
+# implementation while that patch is still uncommitted; once committed, ``git_commit`` in the run metadata does.
+NOISE_SEEDING_PATCH_SHA256 = "881d30a130bbbc5993a0fcb3551725860ad1ebf03bd378d1515f89157e597d7e"
+
+
+def noise_seeding_metadata() -> dict[str, Any]:
+    """Provenance of the noise seeding used by this run (recorded in the verification summary)."""
+    src = Path(_noise.__file__).read_bytes()
+    return {
+        "master_seed": _noise.NOISE_MASTER_SEED,
+        "scheme": "sha256(master|image_id|perturbation_type)",
+        "image_id_normalization": "backslash -> forward slash; then UTF-8 encoded; no other change",
+        "digest_to_seed": "first 8 bytes of the SHA-256 digest, big-endian unsigned 64-bit integer, "
+                          "passed to numpy.random.default_rng",
+        "severity_in_seed": False,
+        "id_source": "ImageRecord.image_id",
+        "reviewed_patch_sha256": NOISE_SEEDING_PATCH_SHA256,
+        "noise_module_sha256": hashlib.sha256(src).hexdigest(),
+    }
+
 
 def shuffled_order_sha256(records, seed: int) -> str:
     """SHA-256 of the seed-shuffled sorted subject IDs (same shuffle the splitter performs)."""
@@ -319,6 +342,7 @@ def _run_fold0_verification(
                 adapt_hyperparameters(model, model_name, len(X_train))
             X_val = preprocess(pipeline, img_recs["validation"], raw_images)
             test_chips = None
+            test_image_ids = [r.image_id for r in img_recs["test"]]   # parallel to X_test; seeds per-image noise
             if preprocess_chips is not None and needs_chips(pipeline.normalizer):
                 # Perturb the uint8 chip and normalise afterwards (see perturbed_inputs).
                 test_chips = preprocess_chips(pipeline, img_recs["test"], raw_images)
@@ -375,7 +399,7 @@ def _run_fold0_verification(
 
         for spec in specs:
             try:
-                emb = embed(perturb_batch(composer, spec, pipeline.normalizer, X_test, test_chips))
+                emb = embed(perturb_batch(composer, spec, pipeline.normalizer, X_test, test_chips, test_image_ids))
                 det_miss = miss["rate"]
                 row: dict[str, Any] = {
                     "model": model_name, "paradigm": paradigm, "backbone": backbone,
@@ -434,6 +458,7 @@ def _run_fold0_verification(
         "shuffled_order": shuffled_cmp,
         "pair_manifest_sha256": pair_shas,
         "pair_params": {p: ps.params for p, ps in pair_sets.items()},
+        "noise_seeding": noise_seeding_metadata(),
         "threshold_protocol": "max-accuracy on clean validation balanced pairs; frozen for test",
         "n_rows": len(rows_out), "failures": failures,
         "stub_backbones": sorted({r["model"] for r in rows_out if r["backbone"] == "STUB"}),

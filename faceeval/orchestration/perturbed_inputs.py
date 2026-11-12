@@ -23,9 +23,15 @@ def needs_chips(normalizer) -> bool:
     return normalizer.mode in CHIP_MODES
 
 
-def perturb_batch(composer, spec, normalizer, clean_arrays, chips=None) -> list:
-    """Return the perturbed, model-ready arrays for one perturbation spec."""
+def perturb_batch(composer, spec, normalizer, clean_arrays, chips=None, image_ids=None) -> list:
+    """Return the perturbed, model-ready arrays for one perturbation spec.
+
+    ``image_ids`` (parallel to the images) seeds the per-image noise; see ``perturbation.noise``.
+    """
     perturbation = composer._get_perturbation(spec.perturbation_type)
-    if chips is None:
-        return [perturbation.apply(arr, spec.severity) for arr in clean_arrays]
-    return [normalizer.normalize(perturbation.apply(chip, spec.severity)) for chip in chips]
+    source = clean_arrays if chips is None else chips
+    ids = [None] * len(source) if image_ids is None else image_ids
+    if len(ids) != len(source):
+        raise ValueError(f"image_ids has {len(ids)} entries for {len(source)} images")
+    out = [perturbation.apply(img, spec.severity, image_id=i) for img, i in zip(source, ids)]
+    return out if chips is None else [normalizer.normalize(o) for o in out]

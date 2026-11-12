@@ -59,7 +59,8 @@ def _distortion(out, clean) -> float:
 
 
 def _perturb(composer, ptype, img, severity):
-    return composer._get_perturbation(ptype).apply(img, severity)
+    # one fixed image id: the same source image gets the same (per-image) noise in every representation
+    return composer._get_perturbation(ptype).apply(img, severity, image_id="fixture/image_0001.jpg")
 
 
 def test_all_sixteen_types_are_covered():
@@ -249,7 +250,9 @@ def test_runner_apply_perturbation_uses_the_same_safe_path(composer, images):
     norm = normalizer_for_model("arcface")
     chip = images["uint8"]
     spec = next(s for s in composer.specs_for_type(PerturbationType.GAUSSIAN_NOISE) if s.severity == 0.6)
-    out = ExperimentRunner._apply_perturbation(composer, spec, [], [norm.normalize(chip)], norm, [chip])
+    from types import SimpleNamespace
+    recs = [SimpleNamespace(image_id="fixture/image_0001.jpg")]
+    out = ExperimentRunner._apply_perturbation(composer, spec, recs, [norm.normalize(chip)], norm, [chip])
     assert (out[0] * 128 + 127.5).mean() > 100 and len(np.unique(out[0])) > 200      # noisy face, not black
 
 
@@ -278,9 +281,9 @@ def test_verification_path_feeds_models_sane_perturbed_inputs(tmp_path, monkeypa
     monkeypatch.setattr(model_registry, "get", lambda name, **k: Recorder() if name == "arcface" else real_get(name, **k))
     import faceeval.orchestration.verification as V
     real_pb = V.perturb_batch
-    def spy(composer, spec, normalizer, X, chips):
+    def spy(composer, spec, normalizer, X, chips, image_ids=None):
         current["label"] = (spec.perturbation_type.value, round(spec.severity, 2))
-        return real_pb(composer, spec, normalizer, X, chips)
+        return real_pb(composer, spec, normalizer, X, chips, image_ids)
     monkeypatch.setattr(V, "perturb_batch", spy)
 
     root = tmp_path / "data"; _make_fake_lfw(root)

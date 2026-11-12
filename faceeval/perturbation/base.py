@@ -31,6 +31,7 @@ reproducible from the spec alone.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from abc import ABC, abstractmethod
 from typing import Any
@@ -38,6 +39,14 @@ from typing import Any
 import numpy as np
 
 from faceeval.core.exceptions import InvalidSeverityError
+
+# Stable id of the image being perturbed; read by perturbations that draw random numbers (noise).
+_IMAGE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("faceeval_image_id", default=None)
+
+
+def current_image_id() -> str | None:
+    """Image id passed to the running ``BasePerturbation.apply`` call (None if the caller gave none)."""
+    return _IMAGE_ID.get()
 from faceeval.core.types import (
     PerturbationCategory,
     PerturbationSpec,
@@ -70,7 +79,7 @@ class BasePerturbation(ABC):
     # Public interface
     # ------------------------------------------------------------------
 
-    def apply(self, image: np.ndarray, severity: Severity) -> np.ndarray:
+    def apply(self, image: np.ndarray, severity: Severity, image_id: str | None = None) -> np.ndarray:
         """
         Apply this perturbation at ``severity`` to ``image``.
 
@@ -82,6 +91,9 @@ class BasePerturbation(ABC):
         severity:
             Normalised intensity in [0.0, 1.0].  ``0.0`` returns a copy
             of the original image.
+        image_id:
+            Stable id of the source image. Only perturbations with randomness (noise) use it, to seed
+            their per-image noise; every other perturbation ignores it.
 
         Returns
         -------
@@ -95,7 +107,11 @@ class BasePerturbation(ABC):
             return image.copy()
 
         original_dtype = image.dtype
-        result = self._apply(image, severity)
+        token = _IMAGE_ID.set(image_id)
+        try:
+            result = self._apply(image, severity)
+        finally:
+            _IMAGE_ID.reset(token)
 
         # Enforce dtype contract
         if result.dtype != original_dtype:

@@ -98,12 +98,14 @@ class PerturbationComposer:
         PerturbedBatch
         """
         perturbation = self._get_perturbation(spec.perturbation_type)
+        if len(image_ids) != len(images):
+            raise ValueError(f"image_ids has {len(image_ids)} entries for {len(images)} images")
         t0 = time.perf_counter()
 
         perturbed: list[Any] = []
-        for img in images:
+        for img, image_id in zip(images, image_ids):
             try:
-                out = perturbation.apply(img, spec.severity)
+                out = perturbation.apply(img, spec.severity, image_id=image_id)
             except Exception as exc:
                 logger.warning(
                     "Perturbation '%s' at severity=%.2f failed on one image: %s; "
@@ -181,10 +183,13 @@ class PerturbationComposer:
         if not specs:
             raise ValueError("compose_specs requires at least one spec")
 
+        if len(image_ids) != len(images):
+            raise ValueError(f"image_ids has {len(image_ids)} entries for {len(images)} images")
         current_images = [img.copy() for img in images]
         for spec in specs:
             perturbation = self._get_perturbation(spec.perturbation_type)
-            current_images = [perturbation.apply(img, spec.severity) for img in current_images]
+            current_images = [perturbation.apply(img, spec.severity, image_id=i)
+                              for img, i in zip(current_images, image_ids)]
 
         return PerturbedBatch(
             original_ids=image_ids,
