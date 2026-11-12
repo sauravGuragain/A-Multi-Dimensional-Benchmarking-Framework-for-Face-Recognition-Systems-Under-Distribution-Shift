@@ -231,7 +231,8 @@ def test_perturb_batch_is_sane_for_every_normalisation_mode(composer, images, mo
     clean = norm.normalize(chip)
     sev = 0.8 if ptype in V_SHAPED else 0.6
     spec = next(s for s in composer.specs_for_type(ptype) if abs(s.severity - sev) < 1e-9)
-    out = perturb_batch(composer, spec, norm, [clean], [chip] if needs_chips(norm) else None)[0]
+    out = perturb_batch(composer, spec, norm, [clean], [chip] if needs_chips(norm) else None,
+                        ["fixture/image_0001.jpg"])[0]      # noise perturbations require image ids
     assert out.shape == clean.shape and np.isfinite(out).all() and len(np.unique(out)) >= 16
     assert out.std() > 0.05 * clean.std()                                         # not flattened to a constant / black frame
     if model in ("dlib_fr", "eigenfaces"):                                       # [0, 1] float domain

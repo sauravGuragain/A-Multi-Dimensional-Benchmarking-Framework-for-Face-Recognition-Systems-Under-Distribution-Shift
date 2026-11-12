@@ -26,7 +26,7 @@ from typing import Any
 
 import numpy as np
 
-from faceeval.core.exceptions import UnknownPluginError
+from faceeval.core.exceptions import PerturbationError, UnknownPluginError
 from faceeval.core.registry import perturbation_registry
 from faceeval.core.types import (
     ImageRecord,
@@ -35,7 +35,7 @@ from faceeval.core.types import (
     PerturbedBatch,
     SubjectID,
 )
-from faceeval.perturbation.base import BasePerturbation, SeverityScheduler
+from faceeval.perturbation.base import BasePerturbation, SeverityScheduler, validate_image_ids
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +76,16 @@ class PerturbationComposer:
         image_ids: list[str],
         spec: PerturbationSpec,
         dataset_name: str = "",
+        strict: bool = True,
     ) -> PerturbedBatch:
         """
         Apply one ``PerturbationSpec`` to every image in ``images``.
+
+        ``strict=True`` (default, the benchmark mode): a perturbation that fails on any image raises
+        ``PerturbationError``; a failed perturbation never silently yields the clean image. ``strict=False`` is the
+        legacy ad-hoc mode: the failure is logged and the original image is returned in its place.
+        ``image_ids`` and ``subject_ids`` must be parallel to ``images``; ids are validated strictly
+        (``validate_image_ids``).
 
         Parameters
         ----------
@@ -98,8 +105,9 @@ class PerturbationComposer:
         PerturbedBatch
         """
         perturbation = self._get_perturbation(spec.perturbation_type)
-        if len(image_ids) != len(images):
-            raise ValueError(f"image_ids has {len(image_ids)} entries for {len(images)} images")
+        validate_image_ids(image_ids, len(images))
+        if len(subject_ids) != len(images):
+            raise ValueError(f"subject_ids has {len(subject_ids)} entries for {len(images)} images")
         t0 = time.perf_counter()
 
         perturbed: list[Any] = []
@@ -107,6 +115,10 @@ class PerturbationComposer:
             try:
                 out = perturbation.apply(img, spec.severity, image_id=image_id)
             except Exception as exc:
+                if strict:
+                    raise PerturbationError(
+                        f"Perturbation '{spec.perturbation_type.value}' at severity={spec.severity:.2f} "
+                        f"failed on image {image_id!r}: {exc}") from exc
                 logger.warning(
                     "Perturbation '%s' at severity=%.2f failed on one image: %s; "
                     "returning original.",
@@ -135,6 +147,7 @@ class PerturbationComposer:
         image_ids: list[str],
         specs: list[PerturbationSpec],
         dataset_name: str = "",
+        strict: bool = True,
     ) -> list[PerturbedBatch]:
         """
         Apply every spec in ``specs`` to the same image batch.
@@ -144,7 +157,7 @@ class PerturbationComposer:
         (perturbation × severity) condition is applied independently.
         """
         return [
-            self.apply_spec(images, subject_ids, image_ids, spec, dataset_name)
+            self.apply_spec(images, subject_ids, image_ids, spec, dataset_name, strict=strict)
             for spec in specs
         ]
 
@@ -183,8 +196,7 @@ class PerturbationComposer:
         if not specs:
             raise ValueError("compose_specs requires at least one spec")
 
-        if len(image_ids) != len(images):
-            raise ValueError(f"image_ids has {len(image_ids)} entries for {len(images)} images")
+        validate_image_ids(image_ids, len(images))
         current_images = [img.copy() for img in images]
         for spec in specs:
             perturbation = self._get_perturbation(spec.perturbation_type)

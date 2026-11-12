@@ -77,8 +77,8 @@ def test_chip_perturbation_is_normalised_after_perturbing(mode):
     clean = [norm.normalize(chip)]
     for ptype in ("jpeg_compression", "gamma", "gaussian_noise", "brightness"):
         spec = _spec(composer, ptype, 1.0)
-        out = perturb_batch(composer, spec, norm, clean, [chip])[0]
-        pert = composer._get_perturbation(spec.perturbation_type).apply(chip, 1.0)
+        out = perturb_batch(composer, spec, norm, clean, [chip], ["fixture/image_0001.jpg"])[0]   # noise needs ids
+        pert = composer._get_perturbation(spec.perturbation_type).apply(chip, 1.0, image_id="fixture/image_0001.jpg")
         np.testing.assert_allclose(out, norm.normalize(pert))
         assert np.isfinite(out).all()
         if mode == "arcface":

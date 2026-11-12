@@ -34,6 +34,8 @@ from faceeval.evaluation import pairs as pairs_mod
 from faceeval.evaluation import split_manifest as sm
 from faceeval.evaluation.metrics import compute_verification_metrics
 from faceeval.orchestration.perturbed_inputs import needs_chips, perturb_batch
+from faceeval.core.registry import perturbation_registry
+from faceeval.perturbation import base as _base
 from faceeval.perturbation import noise as _noise
 
 logger = logging.getLogger(__name__)
@@ -58,24 +60,44 @@ FAR_POINTS = [0.001, 0.01, 0.1]
 # ---------------------------------------------------------------------------
 
 
-# SHA-256 of the reviewed per-image noise-seeding patch (per_image_noise_seeding.patch). It identifies the
-# implementation while that patch is still uncommitted; once committed, ``git_commit`` in the run metadata does.
-NOISE_SEEDING_PATCH_SHA256 = "881d30a130bbbc5993a0fcb3551725860ad1ebf03bd378d1515f89157e597d7e"
+def _id_seeded_perturbation_types() -> list[str]:
+    """Registered perturbation types whose randomness is seeded per image id (``USES_IMAGE_ID``).
+
+    Derived from the registry, not hard-coded. Import order is safe: importing ``faceeval.perturbation.noise``
+    (done at the top of this module) first runs ``faceeval.perturbation.__init__``, which registers every built-in
+    perturbation. A plugin registered later would appear automatically.
+    """
+    return sorted(key for key in perturbation_registry.list_registered()
+                  if getattr(perturbation_registry.get(key), "USES_IMAGE_ID", False))
+
+
+def _module_sha256(module) -> str:
+    return hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
 
 
 def noise_seeding_metadata() -> dict[str, Any]:
-    """Provenance of the noise seeding used by this run (recorded in the verification summary)."""
-    src = Path(_noise.__file__).read_bytes()
+    """Provenance of the noise seeding used by this run (recorded in the verification summary).
+
+    The seed depends on code in TWO files, so both are fingerprinted separately: ``noise/__init__.py`` (seed
+    derivation, noise generation) and ``base.py`` (``normalize_image_id``, id validation). Changing either one
+    changes a recorded hash.
+    """
     return {
+        "protocol_version": _noise.NOISE_PROTOCOL_VERSION,
         "master_seed": _noise.NOISE_MASTER_SEED,
         "scheme": "sha256(master|image_id|perturbation_type)",
-        "image_id_normalization": "backslash -> forward slash; then UTF-8 encoded; no other change",
+        "image_id_normalization": "Unicode NFC; then backslash -> forward slash; then UTF-8 encoded; no other change",
         "digest_to_seed": "first 8 bytes of the SHA-256 digest, big-endian unsigned 64-bit integer, "
                           "passed to numpy.random.default_rng",
         "severity_in_seed": False,
         "id_source": "ImageRecord.image_id",
-        "reviewed_patch_sha256": NOISE_SEEDING_PATCH_SHA256,
-        "noise_module_sha256": hashlib.sha256(src).hexdigest(),
+        "perturbation_types": _id_seeded_perturbation_types(),
+        "salt_pepper": "corrupted = U1 < density; salt if U2 < 0.5 else pepper; U1, U2 drawn in that order "
+                       "from the per-image stream (polarity independent of severity)",
+        "numpy_version": np.__version__,
+        "stream_fingerprint": _noise.noise_stream_fingerprint(),
+        "noise_module_sha256": _module_sha256(_noise),
+        "base_module_sha256": _module_sha256(_base),
     }
 
 
