@@ -547,7 +547,7 @@ class ExperimentRunner:
         When ``chips`` (uint8 aligned faces) are given, the perturbation is applied to the
         chip and the result normalised; otherwise it is applied to ``clean_arrays`` directly.
         """
-        return perturb_batch(composer, spec, normalizer, clean_arrays, chips)
+        return perturb_batch(composer, spec, normalizer, clean_arrays, chips, [r.image_id for r in records])
 
     @staticmethod
     def _adapt_hyperparameters_to_data_size(model, model_name: str, n_train: int) -> None:

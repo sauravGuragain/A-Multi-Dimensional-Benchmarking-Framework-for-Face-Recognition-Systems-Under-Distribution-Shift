@@ -31,13 +31,76 @@ reproducible from the spec alone.
 
 from __future__ import annotations
 
+import contextvars
 import logging
+import unicodedata
 from abc import ABC, abstractmethod
 from typing import Any
 
 import numpy as np
 
-from faceeval.core.exceptions import InvalidSeverityError
+from faceeval.core.exceptions import InvalidSeverityError, PerturbationError
+
+# Stable id of the image being perturbed; read by perturbations that draw random numbers (noise).
+_IMAGE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("faceeval_image_id", default=None)
+
+
+def current_image_id() -> str | None:
+    """Image id passed to the running ``BasePerturbation.apply`` call (None if the caller gave none)."""
+    return _IMAGE_ID.get()
+
+
+def normalize_image_id(image_id: str) -> str:
+    """Canonical form of an image id used for noise seeding: Unicode NFC, then backslashes -> forward slashes.
+    Nothing else is changed (case and surrounding spaces are significant)."""
+    return unicodedata.normalize("NFC", image_id).replace(chr(92), "/")
+
+
+# Characters that make an id invisible or ambiguous: control characters (Cc: NUL, newline, tab, DEL, C1),
+# format characters (Cf: zero-width space/joiners, BOM, bidi marks) and lone surrogates (Cs). Letters, accents,
+# CJK, emoji etc. are untouched. (Cf also contains the zero-width non-joiner used in some Persian/Indic scripts;
+# LFW file names are Latin, and an id containing one is rejected on purpose rather than risk invisible differences.)
+_FORBIDDEN_ID_CATEGORIES = {"Cc": "control", "Cf": "format / zero-width", "Cs": "surrogate"}
+
+
+def check_image_id(image_id: object, position: int | None = None) -> None:
+    """Raise if ``image_id`` is not a usable image id: a non-empty, non-whitespace ``str`` without control,
+    format/zero-width or surrogate characters."""
+    where = "" if position is None else f" at position {position}"
+    if not isinstance(image_id, str):
+        raise TypeError(f"image id{where} must be a str, got {type(image_id).__name__}: {image_id!r}")
+    if not image_id.strip():
+        raise ValueError(f"image id{where} is empty or whitespace-only: {image_id!r}")
+    for ch in image_id:
+        kind = _FORBIDDEN_ID_CATEGORIES.get(unicodedata.category(ch))
+        if kind:
+            raise ValueError(f"image id{where} contains a {kind} character U+{ord(ch):04X}: {image_id!r}")
+
+
+def validate_image_ids(image_ids: object, n_images: int, what: str = "images") -> None:
+    """Strict validation of the ids of a benchmark batch.
+
+    Rejects ``None``, a bare ``str``/``bytes`` passed instead of a collection of ids, a length different from
+    ``n_images``, any id rejected by ``check_image_id``, and duplicate ids (two images with one id would silently
+    share one noise realisation). Duplicates are judged on the canonical form (``normalize_image_id``), because
+    that is what seeds the noise: ``a\\b`` and ``a/b``, or an NFC and an NFD spelling of one name, are the same id.
+    """
+    if image_ids is None:
+        raise ValueError(f"image_ids is required for a benchmark batch of {n_images} {what}; got None")
+    if isinstance(image_ids, (str, bytes, bytearray)):
+        raise TypeError(f"image_ids must be a collection with one id per image, not a single {type(image_ids).__name__}: "
+                        f"{image_ids!r}")
+    if len(image_ids) != n_images:  # type: ignore[arg-type]
+        raise ValueError(f"image_ids has {len(image_ids)} entries for {n_images} {what}")  # type: ignore[arg-type]
+    seen: dict[str, int] = {}
+    for pos, image_id in enumerate(image_ids):  # type: ignore[attr-defined]
+        check_image_id(image_id, pos)
+        key = normalize_image_id(image_id)
+        if key in seen:
+            raise ValueError(f"duplicate image id {image_id!r} (canonical {key!r}) at positions {seen[key]} and {pos}")
+        seen[key] = pos
+
+
 from faceeval.core.types import (
     PerturbationCategory,
     PerturbationSpec,
@@ -65,12 +128,15 @@ class BasePerturbation(ABC):
 
     PERTURBATION_TYPE: PerturbationType    = NotImplemented  # type: ignore[assignment]
     CATEGORY:          PerturbationCategory = NotImplemented  # type: ignore[assignment]
+    # True for perturbations whose randomness is seeded per image id (noise). Benchmark batches must then
+    # supply image ids; ad-hoc ``apply(image, severity)`` calls still work (content-hash fallback).
+    USES_IMAGE_ID: bool = False
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def apply(self, image: np.ndarray, severity: Severity) -> np.ndarray:
+    def apply(self, image: np.ndarray, severity: Severity, image_id: str | None = None) -> np.ndarray:
         """
         Apply this perturbation at ``severity`` to ``image``.
 
@@ -82,6 +148,10 @@ class BasePerturbation(ABC):
         severity:
             Normalised intensity in [0.0, 1.0].  ``0.0`` returns a copy
             of the original image.
+        image_id:
+            Stable id of the source image. Only perturbations with randomness (noise) use it, to seed
+            their per-image noise; every other perturbation ignores it. A supplied id is validated
+            (``check_image_id``) at every severity, including 0.0.
 
         Returns
         -------
@@ -91,11 +161,18 @@ class BasePerturbation(ABC):
         if not 0.0 <= severity <= 1.0:
             raise InvalidSeverityError(severity)
 
+        if image_id is not None:
+            check_image_id(image_id)        # a supplied id must be valid at EVERY severity (also 0.0)
+
         if severity == 0.0:
             return image.copy()
 
         original_dtype = image.dtype
-        result = self._apply(image, severity)
+        token = _IMAGE_ID.set(image_id)
+        try:
+            result = self._apply(image, severity)
+        finally:
+            _IMAGE_ID.reset(token)
 
         # Enforce dtype contract
         if result.dtype != original_dtype:
