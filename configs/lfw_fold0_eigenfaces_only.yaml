@@ -1,0 +1,124 @@
+# Eigenfaces-only copy of lfw_fold0_verification_full.yaml: same protocol, one cheap model, separate output folders.
+# (Output paths in the description below refer to the original config; this run writes under experiments/lfw_fold0_eigenfaces_only/.)
+experiment_name: lfw_fold0_eigenfaces_only
+description: >
+  LFW Fold 0 pair-verification benchmark with real pretrained models only.
+  Executes: Fold 0 split (identity-disjoint, 10 folds, seed 42) -> split manifest ->
+  validation/test pair manifests -> per-model embeddings -> threshold chosen on clean
+  validation pairs and frozen -> test pairs scored under every perturbation x severity.
+  Outputs: experiments/lfw_fold0_verification/verification/<run_id>/
+  (split_manifest_fold0.tsv, pairs_*_fold0.tsv, verification_results.csv/.json).
+
+  NOT executed by this protocol: the closed-set identification sweep and everything
+  derived from it (fingerprints, deployment rankings, identification CSV exports).
+  Calibration, fairness and failure-analysis flags are not read by the runner under
+  any protocol. To also run the identification sweep, set evaluation_protocol: both
+  and re-enable the flags that apply (compute_fingerprints, compute_deployment_scores,
+  export_csv). Not comparable to identification results.
+
+# ── Reproducibility ────────────────────────────────────────────────────────
+random_seed: 42
+# Verification only. 'both' would additionally run the closed-set identification sweep.
+evaluation_protocol: lfw_fold0_verification
+require_real_models: true   # abort instead of silently using stub backbones
+deterministic_mode: true
+
+# ── Data ───────────────────────────────────────────────────────────────────
+dataset_names:
+  - lfw
+data_root: data/
+# split_strategy / test_fraction / val_fraction apply only to the identification sweep
+# (evaluation_protocol: both). Fold 0 verification uses its own fixed identity-disjoint split.
+split_strategy: stratified
+test_fraction: 0.30
+val_fraction: 0.10
+
+# ── Models ─────────────────────────────────────────────────────────────────
+traditional_models:
+  - eigenfaces
+
+deep_models: []
+
+# ── Perturbation schedule ──────────────────────────────────────────────────
+perturbation_schedule:
+  perturbation_types:
+    - gaussian_blur
+    - motion_blur
+    - gaussian_noise
+    - salt_pepper_noise
+    - speckle_noise
+    - brightness
+    - contrast
+    - gamma
+    - rotation
+    - scaling
+    - cropping
+    - random_occlusion
+    - face_mask
+    - sunglasses
+    - jpeg_compression
+    - resolution_degradation
+  severity_levels:
+    - 0.0
+    - 0.2
+    - 0.4
+    - 0.6
+    - 0.8
+    - 1.0
+  compose_perturbations: false
+
+# ── Evaluation flags ───────────────────────────────────────────────────────
+# Under evaluation_protocol: lfw_fold0_verification none of these run:
+#   compute_fingerprints / compute_deployment_scores consume identification results (none here);
+#   compute_calibration / compute_fairness / compute_failure_analysis are not read by the runner.
+compute_calibration: false
+compute_fairness: false
+compute_fingerprints: false
+compute_failure_analysis: false
+compute_deployment_scores: false
+
+# Used only when compute_deployment_scores is true (needs evaluation_protocol: both).
+deployment_scenarios:
+  - border_control
+  - access_control
+  - mobile_authentication
+  - surveillance
+  - research_benchmark
+
+# ── Custom scenario weights (override defaults for ablation study) ─────────
+# Uncomment to use custom weights:
+# custom_deployment_weights:
+#   border_control:
+#     accuracy: 0.35
+#     robustness: 0.25
+#     calibration: 0.10
+#     fairness: 0.15
+#     latency: 0.05
+#     memory: 0.05
+#     computational_cost: 0.05
+
+# ── Resource profiling ─────────────────────────────────────────────────────
+profile_resources: false   # not read by the runner
+profile_batch_size: 32
+
+# ── Feature caching ────────────────────────────────────────────────────────
+use_feature_cache: false   # not read by the runner
+feature_cache_dir: experiments/cache/lfw_fold0_eigenfaces_only/
+
+# ── Output ─────────────────────────────────────────────────────────────────
+output_dir: experiments/lfw_fold0_eigenfaces_only/
+report_dir: reports/lfw_fold0_eigenfaces_only/
+# The verification CSV/JSON are always written by the verification stage (see description).
+# These flags control the identification-report exporters only, which have no data here.
+export_svg: false
+export_png: false
+export_csv: false
+export_json: false
+generate_pdf_report: false
+
+# ── MLflow ─────────────────────────────────────────────────────────────────
+mlflow_tracking_uri: sqlite:///experiments/mlflow.db
+mlflow_experiment_name: lfw_fold0_eigenfaces_only
+
+# ── Hardware ───────────────────────────────────────────────────────────────
+device: auto   # auto-detects CUDA if available, falls back to CPU
