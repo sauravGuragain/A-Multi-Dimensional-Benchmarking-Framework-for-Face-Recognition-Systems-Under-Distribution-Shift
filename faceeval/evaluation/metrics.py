@@ -237,10 +237,13 @@ def compute_verification_metrics(
     sorted_fprs = [p[0] for p in sorted_points]
     sorted_tprs = [p[1] for p in sorted_points]
     sorted_thresholds = [p[2] for p in sorted_points]
-    auc = float(trapezoid(sorted_tprs, sorted_fprs))
+    # Exact AUC / EER: computed from every distinct score (not the n_thresholds grid), so they carry no
+    # grid-resolution error and equal the rank-based AUC (ties count 1/2). The grid still drives the curves.
+    exact_thr, exact_far, exact_frr = _exact_far_frr(scores, labels)
+    auc = float(trapezoid(1.0 - exact_frr, exact_far))
 
-    # --- EER: linear interpolation where FAR == FRR ---
-    eer, eer_thresh = _compute_eer(fars, frrs, thresholds.tolist())
+    # --- EER: linear interpolation where FAR == FRR on the exact ROC polyline ---
+    eer, eer_thresh = _compute_eer(exact_far.tolist(), exact_frr.tolist(), exact_thr.tolist())
 
     # --- ROC curve ---
     roc_curve = ROCCurve(
@@ -347,36 +350,47 @@ def build_evaluation_result(
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _exact_far_frr(scores: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vertices of the exact ROC, ordered strictest -> laxest threshold (accept when ``score >= threshold``).
+
+    Returns ``(thresholds, far, frr)``, each of length ``n_distinct_scores + 1``. Vertex 0 is "accept nothing"
+    (FAR 0, FRR 1, threshold just above the maximum score); the last vertex is the minimum score (FAR 1, FRR 0).
+    Tied scores form one vertex, because no threshold can separate them. Requires both classes present."""
+    n_pos = int(labels.sum())
+    n_neg = int((~labels).sum())
+    order = np.argsort(-scores, kind="stable")
+    s_sorted = scores[order]
+    y_sorted = labels[order]
+    tp = np.cumsum(y_sorted)
+    fp = np.cumsum(~y_sorted)
+    last_of_tie = np.r_[s_sorted[1:] != s_sorted[:-1], True]
+    thresholds = np.r_[np.nextafter(s_sorted[0], np.inf), s_sorted[last_of_tie]]
+    far = np.r_[0.0, fp[last_of_tie] / n_neg]
+    frr = np.r_[1.0, 1.0 - tp[last_of_tie] / n_pos]
+    return thresholds, far, frr
+
+
 def _compute_eer(
     fars: list[float],
     frrs: list[float],
     thresholds: list[float],
 ) -> tuple[float, float]:
-    """Linear interpolation for EER."""
-    diffs = [abs(f - r) for f, r in zip(fars, frrs)]
-    idx = int(np.argmin(diffs))
+    """Equal error rate by linear interpolation where FAR == FRR.
 
-    if idx == 0 or idx == len(fars) - 1:
-        eer = (fars[idx] + frrs[idx]) / 2.0
-        return eer, thresholds[idx]
-
-    # Interpolate between idx-1 and idx
-    for i in range(len(fars) - 1):
-        f1, r1 = fars[i], frrs[i]
-        f2, r2 = fars[i + 1], frrs[i + 1]
-        if (f1 - r1) * (f2 - r2) <= 0:
-            denom = (f2 - r2) - (f1 - r1)
-            if abs(denom) < 1e-12:
-                eer = (f1 + r1) / 2.0
-                thresh = thresholds[i]
-            else:
-                t = (r1 - f1) / denom
-                eer = f1 + t * (f2 - f1)
-                thresh = thresholds[i] + t * (thresholds[i + 1] - thresholds[i])
-            return float(eer), float(thresh)
-
-    eer = (fars[idx] + frrs[idx]) / 2.0
-    return float(eer), float(thresholds[idx])
+    ``fars``/``frrs``/``thresholds`` are ROC vertices ordered strictest -> laxest, starting at the "accept
+    nothing" vertex (FAR 0, FRR 1) and ending at "accept everything" (FAR 1, FRR 0), as returned by
+    ``_exact_far_frr``. FAR - FRR is then non-decreasing from -1 to +1, so exactly one crossing exists; it is
+    the first vertex with FAR >= FRR, interpolated against its predecessor (the chord is the randomised-tie
+    operating line). Fully tied scores give 0.5; perfect separation gives 0.0."""
+    far = np.asarray(fars, dtype=np.float64)
+    frr = np.asarray(frrs, dtype=np.float64)
+    thr = np.asarray(thresholds, dtype=np.float64)
+    diff = far - frr
+    k = int(np.argmax(diff >= 0.0))
+    if diff[k] == 0.0 or k == 0:
+        return float(far[k]), float(thr[k])
+    t = -diff[k - 1] / (diff[k] - diff[k - 1])
+    return float(far[k - 1] + t * (far[k] - far[k - 1])), float(thr[k - 1] + t * (thr[k] - thr[k - 1]))
 
 
 def _compute_pr_curve(
