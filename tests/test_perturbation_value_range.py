@@ -240,8 +240,9 @@ def test_perturb_batch_is_sane_for_every_normalisation_mode(composer, images, mo
     if model == "arcface":                                                       # (x - 127.5) / 128 domain
         assert -1.0 <= out.min() and out.max() <= 1.0
         assert (out * 128 + 127.5).mean() > 8                                     # i.e. a visible image, not black
-    if model == "facenet":                                                       # per-image standardised RGB
-        assert abs(out.mean()) < 1e-3 and abs(out.std() - 1) < 1e-2
+    if model == "facenet":                                                       # fixed (x - 127.5) / 128 RGB domain
+        assert -1.0 <= out.min() and out.max() <= 1.0
+        assert (out * 128 + 127.5).mean() > 8                                     # a visible image, not black
     assert np.abs(out - clean).mean() > 1e-3                                      # and it really changed
 
 

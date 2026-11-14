@@ -35,9 +35,9 @@ import numpy as np
 
 from faceeval.core.exceptions import PreprocessingError
 from faceeval.core.types import ImageRecord
-from faceeval.preprocessing.aligner import AlignedFace, FaceAligner
+from faceeval.preprocessing.aligner import AlignedFace, CentreCropAligner, FaceAligner
 from faceeval.preprocessing.detector import DetectionResult, FaceDetector
-from faceeval.preprocessing.normalizer import Normalizer, normalizer_for_model
+from faceeval.preprocessing.normalizer import NormalizationMode, Normalizer, normalizer_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -276,10 +276,20 @@ class PreprocessingPipeline:
 # Factory: build a model-specific pipeline
 # ---------------------------------------------------------------------------
 
+# FaceNet framing: centre crop fraction of the original LFW image. Chosen on the Fold 0 VALIDATION pairs
+# only (validation AUC of FaceNet: fraction 0.5 / 0.6 / 0.8 -> 0.9999 / 0.9999 / 0.9995, indistinguishable;
+# 0.8 is the largest fraction within 0.002 AUC of the best and keeps the most context for the
+# rotation / scaling / cropping / occlusion perturbations). Test pairs were not used to choose it.
+FACENET_CENTRE_CROP_FRACTION = 0.8
+
+
 def pipeline_for_model(
     model_name: str,
     detector_backends: list[str] | None = None,
     skip_detection_for_pre_cropped: bool = True,
+    *,
+    normalization: NormalizationMode | str | None = None,
+    crop_fraction: float | None = None,
 ) -> PreprocessingPipeline:
     """
     Build a ``PreprocessingPipeline`` wired for a specific recognition model.
@@ -297,13 +307,28 @@ def pipeline_for_model(
         ``["opencv_dnn", "haar", "whole_image"]``.
     skip_detection_for_pre_cropped:
         Pass ``True`` for LFW / VGGFace2; ``False`` for in-the-wild images.
+    normalization:
+        Explicit override of the model's normalisation mode (default: the model's own mode). For
+        FaceNet the default is ``FACENET_FIXED``; pass ``"facenet"`` to opt in to the legacy
+        per-image standardisation.
+    crop_fraction:
+        FaceNet only: centre-crop fraction (default ``FACENET_CENTRE_CROP_FRACTION``). Passing it
+        for any other model raises ``ValueError`` (no other model uses a centre crop).
     """
+    if crop_fraction is not None and model_name != "facenet":
+        raise ValueError(f"crop_fraction applies to 'facenet' only, not '{model_name}'")
     from faceeval.preprocessing.normalizer import _MODEL_TO_SIZE
     output_size = _MODEL_TO_SIZE.get(model_name, 112)
 
     detector = FaceDetector(backends=detector_backends or ["opencv_dnn", "haar", "whole_image"])
-    aligner = FaceAligner(output_size=output_size)
-    normalizer = normalizer_for_model(model_name)
+    if model_name == "facenet":
+        aligner: FaceAligner = CentreCropAligner(
+            output_size=output_size,
+            crop_fraction=FACENET_CENTRE_CROP_FRACTION if crop_fraction is None else crop_fraction)
+    else:
+        aligner = FaceAligner(output_size=output_size)
+    normalizer = (normalizer_for_model(model_name) if normalization is None
+                  else Normalizer(mode=normalization, target_size=output_size))
 
     return PreprocessingPipeline(
         detector=detector,
@@ -323,3 +348,13 @@ def default_pipeline(skip_detection_for_pre_cropped: bool = True) -> Preprocessi
         "arcface",
         skip_detection_for_pre_cropped=skip_detection_for_pre_cropped,
     )
+
+
+def describe_preprocessing(pipeline: PreprocessingPipeline) -> dict[str, Any]:
+    """Exact, JSON-serialisable description of a pipeline's preprocessing (recorded in experiment outputs)."""
+    aligner = pipeline.aligner
+    return {
+        "normalization_mode": pipeline.normalizer.mode.value,
+        "alignment": "centre_crop" if isinstance(aligner, CentreCropAligner) else "affine_fixed_landmarks",
+        "crop_fraction": aligner.crop_fraction if isinstance(aligner, CentreCropAligner) else None,
+    }

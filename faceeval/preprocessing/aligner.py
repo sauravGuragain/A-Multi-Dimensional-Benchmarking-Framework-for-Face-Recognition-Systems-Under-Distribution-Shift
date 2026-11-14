@@ -277,3 +277,46 @@ class FaceAligner:
         # Scale from the 112 template for arbitrary sizes
         scale = size / 112.0
         return (TEMPLATE_112 * scale).astype(np.float32)
+
+
+class CentreCropAligner(FaceAligner):
+    """
+    Detection-free centred square crop, used for FaceNet.
+
+    The whole-image "detection" used by the verification stage places fixed
+    landmark fractions on the frame, so the affine chip is roughly the entire
+    250 px LFW image with the face filling only its central part.  Cropping the
+    central ``crop_fraction`` of the shorter side and resizing (INTER_AREA) to
+    ``output_size`` frames the face the way the FaceNet backbone expects.
+
+    ``crop_fraction=0.8`` was chosen on clean *validation* pairs only
+    (largest fraction within 0.002 AUC of the best candidate).
+    """
+
+    def __init__(self, output_size: int = 160, crop_fraction: float = 0.8) -> None:
+        super().__init__(output_size=output_size)
+        if not (0.0 < crop_fraction <= 1.0):          # also rejects NaN
+            raise ValueError(f"crop_fraction must be in (0, 1], got {crop_fraction!r}")
+        self._crop_fraction = float(crop_fraction)
+
+    @property
+    def crop_fraction(self) -> float:
+        return self._crop_fraction
+
+    def align(self, image_bgr: np.ndarray, result: Any = None) -> AlignedFace:
+        h, w = image_bgr.shape[:2]
+        side = max(1, int(round(self._crop_fraction * min(h, w))))
+        y0, x0 = (h - side) // 2, (w - side) // 2
+        crop = image_bgr[y0:y0 + side, x0:x0 + side]
+        chip = cv2.resize(crop, (self._size, self._size), interpolation=cv2.INTER_AREA)
+        return AlignedFace(
+            image=chip,
+            source_path=getattr(result, "image_path", "") or "",
+            bounding_box=getattr(result, "primary_box", None),
+            landmarks_used=None,
+            transform_matrix=None,
+            alignment_method="centre_crop",
+        )
+
+    def align_all(self, image_bgr: np.ndarray, result: Any = None) -> list:
+        return [self.align(image_bgr, result)]

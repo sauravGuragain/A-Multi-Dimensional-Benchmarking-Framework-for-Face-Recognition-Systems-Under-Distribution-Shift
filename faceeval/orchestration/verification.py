@@ -271,7 +271,7 @@ def _run_fold0_verification(
     from faceeval.core.types import SplitStrategy
     from faceeval.data.splitter import DatasetSplitter
     from faceeval.core.registry import model_registry
-    from faceeval.preprocessing.pipeline import pipeline_for_model
+    from faceeval.preprocessing.pipeline import describe_preprocessing, pipeline_for_model
 
     progress = progress or (lambda stage, done, total: None)
     seed = config.random_seed
@@ -345,6 +345,7 @@ def _run_fold0_verification(
     # ---- 4. Per-model evaluation -----------------------------------------------------
     rows_out: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
+    preprocessing: dict[str, dict[str, Any]] = {}   # exact preprocessing per model, written to the JSON
     total = len(model_names) * len(specs)
     done = 0
     fatal: OrchestratorError | None = None   # require_real_models violation: stop, but write results first
@@ -355,6 +356,7 @@ def _run_fold0_verification(
         try:
             model = (get_model or model_registry.get)(model_name)
             pipeline = pipeline_for_model(model_name, skip_detection_for_pre_cropped=True)
+            prep = preprocessing[model_name] = describe_preprocessing(pipeline)
             is_deep = paradigm == "deep_learning"
             if is_deep:
                 X_train, y_train = [], [r.subject_id for r in parts_recs["train"]]
@@ -429,6 +431,9 @@ def _run_fold0_verification(
                     "label": spec.label, "embedding_dim": emb_dim, "threshold": thr,
                     "detector_miss_rate": det_miss, "val_detector_miss_rate": val_miss,
                 }
+                if is_deep:        # classical rows keep their original columns
+                    row.update({"normalization_mode": prep["normalization_mode"], "alignment": prep["alignment"],
+                                "crop_fraction": prep["crop_fraction"]})
                 t_pairs, t_lab = pa["test"]["balanced"]
                 s_bal = _scores(emb, t_pairs)
                 row.update(_accuracy_at(s_bal, t_lab, thr))
@@ -482,6 +487,7 @@ def _run_fold0_verification(
         "pair_params": {p: ps.params for p, ps in pair_sets.items()},
         "noise_seeding": noise_seeding_metadata(),
         "threshold_protocol": "max-accuracy on clean validation balanced pairs; frozen for test",
+        "preprocessing": preprocessing,
         "n_rows": len(rows_out), "failures": failures,
         "stub_backbones": sorted({r["model"] for r in rows_out if r["backbone"] == "STUB"}),
         "results": rows_out,

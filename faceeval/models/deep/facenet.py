@@ -21,10 +21,10 @@ Input contract
 --------------
 FaceNet expects:
     * RGB channel order (not BGR).
-    * Per-image standardisation: (x − mean(x)) / std(x).
+    * Fixed standardisation: (x − 127.5) / 128 (the facenet-pytorch pretrained-weights contract).
     * Shape: (N, 3, H, W) PyTorch tensor, H = W = 160.
 
-The preprocessing pipeline's ``NormalizationMode.FACENET`` mode handles
+The preprocessing pipeline's ``NormalizationMode.FACENET_FIXED`` mode handles
 this.  The pipeline passes float32 arrays of shape (160, 160, 3) in RGB
 order (already channel-swapped from BGR by the normalizer).
 """
@@ -142,7 +142,7 @@ class FaceNetRecognizer(DeepRecognizerBase):
         Embed a list of face arrays through InceptionResNetV1.
 
         Input arrays are expected to be float32 RGB (160, 160, 3) from
-        ``NormalizationMode.FACENET`` — already per-image standardised and
+        ``NormalizationMode.FACENET_FIXED`` — already fixed-standardised ((x − 127.5) / 128) and
         in RGB order.
         """
         if self._backbone is None:

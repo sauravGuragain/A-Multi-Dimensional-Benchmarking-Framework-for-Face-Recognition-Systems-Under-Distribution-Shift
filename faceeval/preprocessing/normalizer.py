@@ -6,7 +6,9 @@ Pixel-level normalisation of aligned face chips.
 Different model families expect different input statistics:
 
 * **ArcFace / InsightFace** — subtract 127.5, divide by 128.0 → range [-1, 1]
-* **FaceNet** — per-image standardisation (zero-mean, unit-variance)
+* **FaceNet** — fixed standardisation ``(x - 127.5) / 128`` in RGB order (the contract of the
+  ``facenet-pytorch`` pretrained weights; mode ``FACENET_FIXED``). The older per-image
+  standardisation (zero-mean, unit-variance; mode ``FACENET``) is kept as an explicit opt-in.
 * **Dlib FR** — [0, 1] float normalisation, RGB channel order
 * **Classical ML** (Eigenfaces, LBP, HOG) — grayscale, optionally
   histogram-equalised
@@ -31,7 +33,8 @@ logger = logging.getLogger(__name__)
 class NormalizationMode(str, Enum):
     """Normalisation strategy identifier."""
     ARCFACE       = "arcface"         # [-1, 1], BGR
-    FACENET       = "facenet"         # zero-mean unit-var, RGB
+    FACENET       = "facenet"         # per-image zero-mean unit-var, RGB (legacy; explicit opt-in)
+    FACENET_FIXED = "facenet_fixed"   # (x - 127.5) / 128, RGB (facenet-pytorch contract; default for FaceNet)
     DLIB          = "dlib"            # [0, 1], RGB
     UNIT_RANGE    = "unit_range"      # [0, 1], BGR (generic DL)
     IMAGENET      = "imagenet"        # ImageNet mean/std, RGB
@@ -107,6 +110,8 @@ class Normalizer:
             return self._arcface(img)
         if m == NormalizationMode.FACENET:
             return self._facenet(img)
+        if m == NormalizationMode.FACENET_FIXED:
+            return self._facenet_fixed(img)
         if m == NormalizationMode.DLIB:
             return self._dlib(img)
         if m == NormalizationMode.UNIT_RANGE:
@@ -132,6 +137,18 @@ class Normalizer:
         Keeps BGR channel order.
         """
         return (img.astype(np.float32) - 127.5) / 128.0
+
+    @staticmethod
+    def _facenet_fixed(img: np.ndarray) -> np.ndarray:
+        """
+        FaceNet fixed standardisation: ``(x - 127.5) / 128`` per pixel, RGB, float32.
+
+        This is the input contract of the ``facenet-pytorch`` pretrained weights
+        (``fixed_image_standardization``). Unlike per-image standardisation it does not
+        cancel global brightness or contrast changes.
+        """
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
+        return (rgb - 127.5) / 128.0
 
     @staticmethod
     def _facenet(img: np.ndarray) -> np.ndarray:
@@ -203,7 +220,7 @@ class Normalizer:
 # ---------------------------------------------------------------------------
 
 _MODEL_TO_MODE: dict[str, NormalizationMode] = {
-    "facenet":      NormalizationMode.FACENET,
+    "facenet":      NormalizationMode.FACENET_FIXED,
     "arcface":      NormalizationMode.ARCFACE,
     "insightface":  NormalizationMode.ARCFACE,
     "dlib_fr":      NormalizationMode.DLIB,

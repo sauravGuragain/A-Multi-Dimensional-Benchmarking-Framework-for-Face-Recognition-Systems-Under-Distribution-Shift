@@ -2,7 +2,7 @@
 
 Perturbations (``faceeval.perturbation``) expect uint8 images or float images in [0, 1].
 Models whose normalisation leaves that range (ArcFace/InsightFace [-1, 1], FaceNet
-per-image standardisation, ImageNet mean/std) must therefore be perturbed on the aligned
+fixed or per-image standardisation, ImageNet mean/std) must therefore be perturbed on the aligned
 uint8 chip and normalised afterwards. Models already normalised to [0, 1] (grayscale
 traditional models, Dlib, unit range) keep the original behaviour: perturb the normalised
 array directly.
@@ -15,6 +15,7 @@ from faceeval.preprocessing.normalizer import NormalizationMode
 CHIP_MODES = frozenset({
     NormalizationMode.ARCFACE,
     NormalizationMode.FACENET,
+    NormalizationMode.FACENET_FIXED,
     NormalizationMode.IMAGENET,
 })
 
