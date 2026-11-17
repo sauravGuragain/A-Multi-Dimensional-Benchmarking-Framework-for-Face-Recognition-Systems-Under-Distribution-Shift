@@ -217,6 +217,259 @@ def _accuracy_at(scores: np.ndarray, labels: np.ndarray, thr: float) -> dict[str
     return {"accuracy": float((pred == labels).mean()), "tar": tar, "far": far}
 
 
+def _valid_rows(emb: np.ndarray) -> np.ndarray:
+    """True for every row that is a real embedding; False for the all-zero vector a failed acquisition
+    (e.g. a detector miss) produces, and for non-finite rows. Both deep wrappers L2-normalise, so a real
+    row has norm 1 and a failure has norm exactly 0; the cut-off 1e-6 sits far from both, so no real
+    embedding is ever called failed. Model-agnostic: it looks only at the embedding."""
+    arr = np.asarray(emb, dtype=np.float64)
+    if arr.ndim != 2:
+        raise ValueError(f"embeddings must be a 2-D (n_images, dim) array, got shape {arr.shape}")
+    norm = np.linalg.norm(arr, axis=1)
+    return np.isfinite(norm) & (norm > 1e-6)
+
+
+def _sanitize(emb: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Failed rows (zero, NaN or Inf) become the zero vector, so every failure is scored the same documented
+    way (cosine 0 with everything) and cannot put NaN/Inf into scores, thresholds or metrics. Valid rows and
+    the array itself are returned unchanged when nothing failed."""
+    if valid.all():
+        return emb
+    out = np.array(emb, copy=True)
+    out[~valid] = 0.0
+    return out
+
+
+def _warn_if_not_unit(emb: np.ndarray, valid: np.ndarray, model_name: str) -> None:
+    """Cosine == dot product only for unit-norm rows; say so if a backbone ever breaks that."""
+    n = np.linalg.norm(np.asarray(emb, dtype=np.float64)[valid], axis=1)
+    if n.size and float(np.abs(n - 1.0).max()) > 1e-3:
+        logger.warning("[%s] valid embeddings are not unit-norm (norm range %.4f..%.4f): scores are dot "
+                       "products, not cosine similarities.", model_name, float(n.min()), float(n.max()))
+
+
+def _pairs_with_failure(valid: np.ndarray, idx_by_pair: list[tuple[int, int]]) -> int:
+    """Number of pairs in which at least one of the two images has no valid embedding."""
+    a = np.fromiter((p[0] for p in idx_by_pair), dtype=np.int64, count=len(idx_by_pair))
+    b = np.fromiter((p[1] for p in idx_by_pair), dtype=np.int64, count=len(idx_by_pair))
+    return int((~valid[a] | ~valid[b]).sum())
+
+
+_POSIX = os.name == "posix"
+
+
+def _unlink_quietly(path: Path, what: str) -> None:
+    """Best-effort removal used on failure paths. A failure to remove is logged and swallowed: it must never
+    replace the exception that made the cleanup necessary."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.error("Could not remove %s %s.", what, path)
+
+
+def _fsync_dir(directory: Path) -> bool:
+    """Best-effort fsync of a directory, so a just-completed ``os.replace`` survives a power loss.
+
+    ``os.replace`` alone makes the swap atomic for readers (they see the old or the new file, never a mix) but
+    does not by itself make the new directory entry durable. This is only attempted on POSIX (Windows cannot
+    open a directory this way). A failure is logged, never raised: the replace already happened, and the
+    run's safety does not depend on it (a lost rename reverts to the older, INCOMPLETE summary). On macOS
+    ``fsync`` does not force the drive's own cache to flush, so this is a best effort, not a hard guarantee."""
+    if not _POSIX:
+        return False
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return True
+    except OSError as exc:
+        logger.warning("Could not fsync directory %s (%s); the rename is atomic but may not survive a power loss.",
+                       directory, exc)
+        return False
+
+
+def _fsync_file(path: Path) -> None:
+    """fsync a completed file by path. Raises on failure: unlike a directory fsync, a file that is not durable
+    must not be published (a recorded row would then point at data that a power loss can empty)."""
+    fd = os.open(path, os.O_RDWR)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _atomic_savez(path: Path, **arrays: Any) -> None:
+    """Save arrays so that ``path`` is either absent/old or complete AND durable, never partial.
+
+    Order: write the temporary file, fsync it, ``os.replace`` it over ``path``, then fsync the directory
+    (best effort, like ``_write_json_atomic``). The caller records the row naming this file only after this
+    returns, so a recorded row never refers to a score file whose data was still only in the page cache."""
+    tmp = path.with_name(path.stem + ".tmp.npz")
+    try:
+        np.savez_compressed(tmp, **arrays)
+        _fsync_file(tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        _unlink_quietly(tmp, "the temporary score file")     # never leave a partial temporary file behind
+        raise
+    _fsync_dir(path.parent)              # after the replace; best effort, see _fsync_dir
+
+
+def _discard_score_file(path: Path) -> None:
+    """Remove the score file of a condition whose row was not recorded. A failure to remove it is logged and
+    swallowed: it must never replace the exception that made the cleanup necessary (the file stays detectable
+    as an orphan, because every recorded row names its own score file)."""
+    _unlink_quietly(path, "the unrecorded score file")
+
+
+def _write_json_atomic(path: Path, obj: Any) -> None:
+    """Write ``obj`` as JSON through a temporary file and ``os.replace``: readers see the old file or the new
+    one, never a partial one, and a failure leaves the old file in place and no temporary file."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(obj, fh, indent=2, default=str)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        _unlink_quietly(tmp, "the temporary summary file")
+        raise
+    _fsync_dir(path.parent)              # after the replace; best effort, see _fsync_dir
+
+
+class _RowStream:
+    """Append-only JSON-lines record of a run, written unbuffered and fsynced after every record.
+
+    It lets a killed or interrupted run (sleep, closed terminal, out-of-memory) keep every condition that
+    finished. The final ``verification_results.csv/.json`` are written exactly as before; a stream with no
+    final ``end`` record therefore marks an interrupted run.
+
+    Commit semantics. A record is one line written with unbuffered ``write`` calls on an ``O_APPEND`` file, so
+    there is no user-space buffer that could flush a record later than the caller believes. The FILE is the only
+    source of truth for "is this record recorded": ``has_row`` reads it back. If a write is interrupted or
+    fails, the line is rolled back when torn (or, after an ordinary error, when not durably flushed) and kept
+    only when it is complete and the interruption was a KeyboardInterrupt/SystemExit, so a record can never
+    be half there, and a caller never has to guess from its own state whether a row exists."""
+
+    def __init__(self, path: Path) -> None:
+        # O_EXCL: exclusive create. An existing file (a previous run's records) is an error, never appended to.
+        self.path = Path(path)
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o644)
+        self._fh = os.fdopen(fd, "ab", buffering=0)
+        self.terminal = False          # True once an "end" or "abort" record has been written
+        self.broken = False            # True once a torn record could not be rolled back: nothing more is appended
+
+    def _truncate(self, size: int) -> bool:
+        """Remove everything after ``size``. Returns False, and marks the stream unusable, if that fails: a torn
+        record may then still be in the file, so no further record may be appended behind it."""
+        try:
+            os.ftruncate(self._fh.fileno(), size)
+            return True
+        except OSError:
+            self.broken = True
+            logger.error("Could not roll back a failed stream record in %s; no further records will be "
+                         "written to it.", self.path)
+            return False
+
+    def write(self, kind: str, payload: dict[str, Any]) -> None:
+        if self.broken:
+            raise OSError(f"row stream {self.path} is unusable after a failed rollback; refusing to append")
+        if self.terminal or self.has_terminal():     # the file decides: the flag may be stale after an interrupt
+            self.terminal = True
+            raise OSError(f"row stream {self.path} already holds a terminal record; refusing to append")
+        data = (json.dumps({"type": kind, **payload}, default=str) + "\n").encode("utf-8")
+        fd = self._fh.fileno()
+        start = os.fstat(fd).st_size
+        try:
+            view = memoryview(data)
+            while view:
+                n = self._fh.write(view)
+                if not isinstance(n, int) or n <= 0 or n > len(view):
+                    raise OSError(f"unbuffered write returned {n!r} for {len(view)} bytes")   # no endless loop
+                view = view[n:]
+            os.fsync(fd)
+        except Exception:
+            # Ordinary failure (disk full, fsync error): the record is not durable, so remove all of it.
+            self._truncate(start)
+            raise
+        except BaseException:
+            # KeyboardInterrupt / SystemExit: a complete line stays (it is a committed record and its score
+            # file must be kept); a torn line is removed so it can never be mistaken for a record.
+            try:
+                size = os.fstat(fd).st_size
+                if start < size < start + len(data):
+                    self._truncate(start)
+                elif size == start + len(data) and kind in ("end", "abort"):
+                    self.terminal = True     # the whole terminal line is in the file: it is committed
+            except OSError:
+                self.broken = True       # cannot tell whether a torn line is there: append nothing more
+            raise
+        if kind in ("end", "abort"):
+            self.terminal = True
+
+    def has_row(self, scores_file: str) -> bool:
+        """True if a complete ``row`` record naming ``scores_file`` is in the stream file. When the file cannot be
+        read the answer is True: keeping a score file is always safe, deleting one a row refers to is not."""
+        try:
+            with open(self.path, "rb") as fh:
+                for line in fh:
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(rec, dict) and rec.get("type") == "row" and rec.get("scores_file") == scores_file:
+                        return True
+        except OSError:
+            return True
+        return False
+
+    def has_terminal(self) -> bool:
+        """True if the stream FILE already holds a complete ``end`` or ``abort`` record. Like ``has_row`` the file,
+        not the ``terminal`` flag, decides (an interrupt can arrive after a record is durable but before the flag
+        is set). A complete JSON terminal object counts even without its trailing newline: appending behind it
+        would merge two records into one unreadable line, so nothing may be appended. A torn (unparseable) tail
+        does not count; ``write`` rolls those back. When the file cannot be read the answer is True: appending
+        nothing is always safe."""
+        try:
+            with open(self.path, "rb") as fh:
+                for line in fh:
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(rec, dict) and rec.get("type") in ("end", "abort"):
+                        return True
+        except OSError:
+            return True
+        return False
+
+    def abort(self, exc: BaseException) -> None:
+        """Best-effort terminal record for a run that stops on an exception (including Ctrl-C).
+
+        Ordinary errors while writing it are swallowed so they cannot replace the exception already
+        propagating. KeyboardInterrupt/SystemExit raised *during* this write are deliberately not caught: a
+        second interrupt is a new request to stop and must not be hidden."""
+        if self.terminal or self._fh.closed:
+            return
+        if self.has_terminal():            # a committed end/abort is already there: never write a second one
+            self.terminal = True
+            return
+        try:
+            self.write("abort", {"error": f"{type(exc).__name__}: {exc}"})
+        except Exception:                  # never mask the exception that is already propagating
+            pass
+
+    def close(self) -> None:
+        if not self._fh.closed:
+            try:
+                self._fh.close()           # every record was already flushed and fsynced by write()
+            except OSError:
+                logger.error("Could not close the verification row stream cleanly.")
+
+
 def _flat_metrics(scores: np.ndarray, labels: np.ndarray, suffix: str) -> dict[str, Any]:
     m = compute_verification_metrics(scores.tolist(), labels.tolist(),
                                      far_operating_points=FAR_POINTS)
@@ -238,22 +491,30 @@ def run_fold0_verification(*, config, **kwargs) -> dict[str, Any]:
     """
     out_dir = Path(config.output_dir) / "verification" / config.run_id
     out_dir.mkdir(parents=True, exist_ok=False)
+    stream = _RowStream(out_dir / "verification_rows.jsonl")
     try:
-        return _run_fold0_verification(out_dir, config=config, **kwargs)
-    except Exception as exc:
-        path = out_dir / "verification_results.json"
-        if not path.exists():
-            with open(path, "w") as fh:
-                json.dump({"protocol": "lfw_fold0_verification", "status": "INCOMPLETE",
-                           "error": f"{type(exc).__name__}: {exc}", "n_rows": 0, "failures": [],
-                           "results": []}, fh, indent=2)
+        return _run_fold0_verification(out_dir, config=config, stream=stream, **kwargs)
+    except BaseException as exc:
+        stream.abort(exc)
+        if isinstance(exc, Exception):
+            path = out_dir / "verification_results.json"
+            try:
+                if not path.exists():
+                    _write_json_atomic(path, {"protocol": "lfw_fold0_verification", "status": "INCOMPLETE",
+                                              "error": f"{type(exc).__name__}: {exc}", "n_rows": 0,
+                                              "failures": [], "results": []})
+            except Exception:              # never mask the exception that is already propagating
+                logger.error("Could not write the INCOMPLETE fallback summary %s.", path)
         raise
+    finally:
+        stream.close()
 
 
 def _run_fold0_verification(
     out_dir: Path,
     *,
     config,
+    stream: _RowStream,
     records: list,
     raw_images: dict | None,
     model_names: list[str],
@@ -350,6 +611,16 @@ def _run_fold0_verification(
     done = 0
     fatal: OrchestratorError | None = None   # require_real_models violation: stop, but write results first
     progress("verification", 0, total)
+    stream.write("plan", {"models": list(model_names), "conditions": [s.label for s in specs],
+                          "n_rows_expected": total})
+
+    if any(m not in trad_names for m in model_names) and len({s_.label for s_ in specs}) != len(specs):
+        raise OrchestratorError("Two perturbation conditions share one label (type + severity to 2 decimals); "
+                                "per-condition score files would collide. Use distinct severities.")
+
+    def _fail(entry: dict[str, str]) -> None:
+        failures.append(entry)
+        stream.write("failure", entry)
 
     for model_name in model_names:
         paradigm = "traditional" if model_name in trad_names else "deep_learning"
@@ -395,17 +666,22 @@ def _run_fold0_verification(
 
             # threshold from CLEAN VALIDATION balanced pairs only
             v_pairs, v_lab = pa["validation"]["balanced"]
-            v_scores = _scores(embed(X_val), v_pairs)
+            val_emb = embed(X_val)
+            val_valid = _valid_rows(val_emb)
+            if is_deep:                                   # classical embeddings are scored exactly as before
+                val_emb = _sanitize(val_emb, val_valid)
+            v_scores = _scores(val_emb, v_pairs)
             val_miss = miss["rate"]
+            _warn_if_not_unit(val_emb, val_valid, model_name)
             if val_miss == val_miss and val_miss > 0.05:
                 logger.warning("[%s] detector missed %.1f%% of clean validation images "
                                "(scored as zero embeddings / non-matches).", model_name, 100 * val_miss)
             thr = best_accuracy_threshold(v_scores, v_lab)
             emb_dim = int(embed(X_val[:1]).shape[1])
-            logger.info("[%s] validation threshold=%.5f (balanced acc=%.4f)", model_name, thr,
-                        _accuracy_at(v_scores, v_lab, thr)["accuracy"])
+            val_acc = _accuracy_at(v_scores, v_lab, thr)["accuracy"]
+            logger.info("[%s] validation threshold=%.5f (balanced acc=%.4f)", model_name, thr, val_acc)
         except EmbeddingError as exc:
-            failures.append({"protocol": "verification", "model": model_name, "stage": "setup",
+            _fail({"protocol": "verification", "model": model_name, "stage": "setup",
                              "error": f"EmbeddingError: {exc}"})
             if config.require_real_models:
                 fatal = OrchestratorError(f"Model '{model_name}' has no real backbone and "
@@ -414,28 +690,47 @@ def _run_fold0_verification(
             done += len(specs); progress("verification", done, total); continue
         except Exception as exc:
             logger.warning("Verification skipped for '%s': %s", model_name, exc)
-            failures.append({"protocol": "verification", "model": model_name, "stage": "setup", "error": f"{type(exc).__name__}: {exc}"})
+            _fail({"protocol": "verification", "model": model_name, "stage": "setup", "error": f"{type(exc).__name__}: {exc}"})
             if config.require_real_models and model_name not in trad_names:
                 fatal = OrchestratorError(f"Model '{model_name}' unavailable and require_real_models=true: {exc}")
                 fatal.__cause__ = exc
                 break
             done += len(specs); progress("verification", done, total); continue
 
+        if is_deep:
+            (out_dir / "scores").mkdir(exist_ok=True)
+            if not (out_dir / "scores" / "test_pairs.npz").exists():
+                _atomic_savez(out_dir / "scores" / "test_pairs.npz",
+                              image_ids=np.asarray(test_image_ids),
+                              bal_pairs=np.asarray(pa["test"]["balanced"][0], dtype=np.int32),
+                              bal_labels=np.asarray(pa["test"]["balanced"][1], dtype=bool),
+                              full_pairs=np.asarray(pa["test"]["full"][0], dtype=np.int32),
+                              full_labels=np.asarray(pa["test"]["full"][1], dtype=bool))
         for spec in specs:
+            score_file = (f"{model_name}__{spec.perturbation_type.value}__sev{spec.severity:.2f}.npz"
+                          if is_deep else None)
             try:
                 emb = embed(perturb_batch(composer, spec, pipeline.normalizer, X_test, test_chips, test_image_ids))
                 det_miss = miss["rate"]
+                valid = _valid_rows(emb)
+                if is_deep:
+                    emb = _sanitize(emb, valid)
                 row: dict[str, Any] = {
                     "model": model_name, "paradigm": paradigm, "backbone": backbone,
                     "perturbation": spec.perturbation_type.value, "severity": spec.severity,
                     "label": spec.label, "embedding_dim": emb_dim, "threshold": thr,
                     "detector_miss_rate": det_miss, "val_detector_miss_rate": val_miss,
                 }
-                if is_deep:        # classical rows keep their original columns
-                    row.update({"normalization_mode": prep["normalization_mode"], "alignment": prep["alignment"],
-                                "crop_fraction": prep["crop_fraction"]})
                 t_pairs, t_lab = pa["test"]["balanced"]
                 s_bal = _scores(emb, t_pairs)
+                if is_deep:        # classical rows keep their original columns
+                    row.update({"normalization_mode": prep["normalization_mode"], "alignment": prep["alignment"],
+                                "crop_fraction": prep["crop_fraction"],
+                                "val_balanced_accuracy": val_acc,
+                                "val_n_failed_embeddings": int((~val_valid).sum()),
+                                "n_test_images": int(valid.size),
+                                "n_failed_embeddings": int((~valid).sum()),
+                                "n_failed_pairs_balanced": _pairs_with_failure(valid, t_pairs)})
                 row.update(_accuracy_at(s_bal, t_lab, thr))
                 row["n_genuine"] = int(t_lab.sum()); row["n_impostor_balanced"] = int((~t_lab).sum())
                 row.update(_flat_metrics(s_bal, t_lab, ""))
@@ -445,11 +740,27 @@ def _run_fold0_verification(
                 row.update(_flat_metrics(s_full, f_lab, "_full"))
                 far_full = _accuracy_at(s_full, f_lab, thr)
                 row["far_full"] = far_full["far"]
+                if is_deep:
+                    row["n_failed_pairs_full"] = _pairs_with_failure(valid, f_pairs)
+                    row["scores_file"] = score_file
+                    _atomic_savez(out_dir / "scores" / score_file,
+                                  valid=valid, s_bal=s_bal, s_full=s_full, threshold=np.float64(thr))
+                stream.write("row", row)       # recorded first: a row in rows_out is always in the stream
                 rows_out.append(row)
             except Exception as exc:
                 logger.warning("Verification condition %s/%s failed: %s", model_name, spec.label, exc)
-                failures.append({"protocol": "verification", "model": model_name, "stage": spec.label,
+                if score_file is not None and not stream.has_row(score_file):   # no file without its row
+                    _discard_score_file(out_dir / "scores" / score_file)
+                _fail({"protocol": "verification", "model": model_name, "stage": spec.label,
                                  "error": f"{type(exc).__name__}: {exc}"})
+            except BaseException:
+                # KeyboardInterrupt / SystemExit: never swallowed. The stream FILE decides (not a local flag, which
+                # an interrupt could leave stale): this condition's score file is removed only if its row is not
+                # in the stream, so no recorded row ever points at a deleted file. Earlier rows and files are
+                # untouched; the interrupt then propagates unchanged and the wrapper records the abort.
+                if score_file is not None and not stream.has_row(score_file):
+                    _discard_score_file(out_dir / "scores" / score_file)
+                raise
             done += 1
             progress("verification", done, total)
 
@@ -466,7 +777,7 @@ def _run_fold0_verification(
     summary = {
         "protocol": "lfw_fold0_verification",
         "full_lfw": full_lfw,
-        "status": "INCOMPLETE" if (failures or fatal or not rows_out) else "COMPLETE",
+        "status": "INCOMPLETE" if (failures or fatal or not rows_out or len(rows_out) != total) else "COMPLETE",
         "dataset": {
             "n_identities": n_identities, "n_images": len(records),
             "scope": "official_lfw" if full_lfw else "custom_or_subset",
@@ -488,12 +799,22 @@ def _run_fold0_verification(
         "noise_seeding": noise_seeding_metadata(),
         "threshold_protocol": "max-accuracy on clean validation balanced pairs; frozen for test",
         "preprocessing": preprocessing,
-        "n_rows": len(rows_out), "failures": failures,
+        "n_rows": len(rows_out), "n_rows_expected": total, "failures": failures,
         "stub_backbones": sorted({r["model"] for r in rows_out if r["backbone"] == "STUB"}),
         "results": rows_out,
     }
-    with open(out_dir / "verification_results.json", "w") as fh:
-        json.dump(summary, fh, indent=2, default=str)
+    # Finalization order. A run is COMPLETE only when BOTH the JSON summary says COMPLETE AND the stream ends
+    # with a successfully fsynced "end" record saying COMPLETE. So the summary is first written as INCOMPLETE,
+    # then the end record is written, and only then is the summary promoted to its final status. Whichever step
+    # fails, the summary on disk is INCOMPLETE; a COMPLETE summary can never exist without a finished stream.
+    results_path = out_dir / "verification_results.json"
+    final_status = summary["status"]
+    summary["status"] = "INCOMPLETE"
+    _write_json_atomic(results_path, summary)
+    stream.write("end", {"status": final_status, "n_rows": len(rows_out), "n_rows_expected": total})
+    if final_status != "INCOMPLETE":
+        summary["status"] = final_status
+        _write_json_atomic(results_path, summary)
     summary["output_dir"] = str(out_dir)
     if fatal is not None:
         raise fatal
