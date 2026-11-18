@@ -15,10 +15,10 @@ Backend
 -------
 We use the ``insightface`` library's ONNX-based inference backend
 (``buffalo_l`` or ``buffalo_sc`` model packs).  This avoids having to
-re-implement the ResNet-100 backbone while staying framework-agnostic
+re-implement the recognition backbone while staying framework-agnostic
 (ONNX Runtime runs on CPU, CUDA, and Apple Silicon without code changes).
 
-Model pack ``buffalo_l``  — large, ResNet100, 512-dim, highest accuracy.
+Model pack ``buffalo_l``  — large pack, ResNet-50 recognition model (w600k_r50, WebFace600K), 512-dim.
 Model pack ``buffalo_sc`` — small, MobileNet, 512-dim, faster on CPU.
 
 Input contract
@@ -228,7 +228,7 @@ class _ArcFaceStub:
     paradigm=ModelParadigm.DEEP_LEARNING,
     model_type=DeepModelType.ARCFACE.value,
     description=(
-        "ArcFace ResNet100 (512-dim embedding, buffalo_l pack). "
+        "ArcFace ResNet-50 (512-dim embedding, buffalo_l pack). "
         "Requires: pip install insightface onnxruntime"
     ),
 )

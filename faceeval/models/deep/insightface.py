@@ -5,7 +5,7 @@ InsightFace recognizer (AdaFace / alternative buffalo packs) and Dlib FR.
 
 InsightFace (separate from ArcFace)
 -------------------------------------
-While ArcFaceRecognizer uses the buffalo_l pack (ResNet-100 + ArcFace loss),
+While ArcFaceRecognizer uses the buffalo_l pack (ResNet-50 recognition model trained with ArcFace loss),
 InsightFaceRecognizer exposes the same library but with:
     * ``antelopev2`` pack — ResNet-50 backbone, faster inference.
     * ``buffalo_s``  pack — lightweight MobileNet backbone.
