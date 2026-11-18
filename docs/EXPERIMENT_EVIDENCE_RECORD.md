@@ -106,9 +106,9 @@ Only focused checks were run for this delivery. The full suite was **not** rerun
 | Capability | Implemented | Validated in the thesis |
 |---|---|---|
 | Subjects | all of LFW (5,749) | 200 |
-| Models | 10 registered | 4 (identification); 4 classical + 2 deep, clean only (Fold 0) |
-| Perturbations | 16 | 3 (identification); 16 for 4 classical models (Fold 0) |
-| Severities | 6-level grid | 3 levels (identification) |
+| Models | 10 registered | 4 (identification); 4 classical + 2 deep across 16 x 6 conditions (Fold 0) |
+| Perturbations | 16 | 3 (identification); 16 for 4 classical + 2 deep models (Fold 0) |
+| Severities | 6-level grid | 3 levels (identification); all 6 levels in Fold-0 verification |
 | Deployment dimensions | 7 | 1 populated (accuracy) |
 | Fingerprint dimensions | 21 | 3 populated |
 
@@ -138,7 +138,7 @@ NOT YET PASTED. The maintainer reports that the command succeeded on the Mac, bu
 ## 9. Evidence that would require a new run (not planned, not needed for the thesis claims)
 
 - A repeat of 2bad8efd to test repeatability.
-- FaceNet and ArcFace over the 16 x 6 perturbation grid; the 10-model benchmark.
+- The complete 10-model benchmark (only 6 models have completed the documented Fold-0 verification sweeps).
 - Calibration, fairness, speed and memory measurements.
 - Confidence intervals from multiple splits.
 - A clean-machine installation.
@@ -147,4 +147,4 @@ NOT YET PASTED. The maintainer reports that the command succeeded on the Mac, bu
 
 - **Fold-0 summaries recorded `environment` only** (python, numpy, code commit; no dirty flag). Runs started after this change also write a `provenance` block to `verification_results.json`: platform, machine, `code_dirty` (tracked files only), versions of torch, torchvision, facenet-pytorch, insightface, onnxruntime, onnx, opencv-python, scikit-image, scikit-learn, scipy and Pillow, and SHA-256 of the default cached FaceNet (`vggface2`) and ArcFace (`buffalo_l`) weight files. Anything undeterminable is written as `not_recorded`. Hardware and a config-file hash remain NOT RECORDED. Runs made earlier have no such block.
 - **Centred perturbations.** In the 0.0-1.0 grid, brightness (shift = (s-0.5)*0.8), contrast (scale 0.3 to 3.0, near identity at about 0.5) and gamma (0.25 to 4.0, identity at 0.5) are two-sided. Severity 0.0 returns the clean image for every type, so these three types are not monotone in severity. Interpret their curves as distance from the neutral centre, and do not read the mean over 0.2-1.0 as "average degradation" for them. This is existing behaviour, documented in `tests/test_perturbation_value_range.py`; no code was changed.
-- **Deep-model sweep status.** FaceNet full Fold-0 verification sweep is COMPLETE: 96/96 conditions, run ID `b567f88089c142d3b7732d993f34c979`. The run outputs and log are preserved in `runs/full_lfw_fold0_deep_facenet_20261118_173444/`; a verified evidence archive is stored outside the repository at `~/Thesis/faceeval_x_full_evidence/facenet_full_20261118_173444.tar.gz` (SHA-256 recorded in the adjacent `.sha256` file). ArcFace remains PENDING and has a config at `configs/lfw_fold0_deep_arcface.yaml` (96 conditions; real pretrained weights required). The verification stage has no resume: an interrupted run must be restarted into a new run directory.
+- **Deep-model sweep status.** Both deep-model Fold-0 verification sweeps are COMPLETE, each with 96/96 conditions. Per-condition failed-embedding and failed-pair counts are retained in the verification CSVs; these are benchmark outcomes, not run-completion failures. FaceNet run ID `b567f88089c142d3b7732d993f34c979` completed in 7,887.1 seconds; its outputs and log are preserved in `runs/full_lfw_fold0_deep_facenet_20261118_173444/`. Its verified evidence archive is `~/Thesis/faceeval_x_full_evidence/facenet_full_20261118_173444.tar.gz` (SHA-256 in the adjacent `.sha256` file). ArcFace run ID `4bdf6982668f4f498fa3fe36d41c885b` completed in 15,826.8 seconds; its outputs and log are preserved in `runs/full_lfw_fold0_deep_arcface_20261118_203249/`. Its verified evidence archive is `~/Thesis/faceeval_x_full_evidence/arcface_full_20261118_203249.tar.gz`, SHA-256 `02fe2d1542adfd414cf3dc479582be5533d8867d19e74ae2d0532400dcd21f49`. Both configs require real pretrained weights. The verification stage has no resume: an interrupted run must be restarted into a new run directory.
