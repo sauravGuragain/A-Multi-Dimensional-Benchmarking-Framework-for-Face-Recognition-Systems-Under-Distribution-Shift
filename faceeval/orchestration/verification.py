@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib.metadata as importlib_metadata
 import json
 import logging
 import os
@@ -115,6 +116,69 @@ def _code_version() -> str:
         return out.stdout.strip() or sm.NOT_RECORDED
     except Exception:
         return sm.NOT_RECORDED
+
+
+# Packages whose versions decide what a deep-model run computes. Recorded in the summary (best effort).
+PROVENANCE_PACKAGES = ("torch", "torchvision", "facenet-pytorch", "insightface", "onnxruntime", "onnx",
+                       "opencv-python", "scikit-image", "scikit-learn", "scipy", "Pillow")
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _weight_files(model_name: str) -> list[Path]:
+    """Cached pretrained-weight files the named deep model would load by default (empty if unknown or absent).
+
+    FaceNet (facenet-pytorch, ``vggface2``): ``<TORCH_HOME or $XDG_CACHE_HOME/torch or ~/.cache/torch>/checkpoints``.
+    ArcFace (InsightFace pack ``buffalo_l``): ``~/.insightface/models/buffalo_l/*.onnx``. Only the default
+    locations are looked at; a model loaded from a custom location is reported as not recorded."""
+    home = Path(os.path.expanduser("~"))
+    if model_name == "facenet":
+        torch_home = os.environ.get("TORCH_HOME") or os.path.join(os.environ.get("XDG_CACHE_HOME") or str(home / ".cache"), "torch")
+        return sorted(Path(os.path.expanduser(torch_home), "checkpoints").glob("*vggface2*"))
+    if model_name == "arcface":
+        return sorted((home / ".insightface" / "models" / "buffalo_l").glob("*.onnx"))
+    return []
+
+
+def run_provenance(model_names) -> dict[str, Any]:
+    """Best-effort provenance that the three ``environment`` fields do not cover (recorded under ``provenance``).
+
+    Records: operating system and machine, whether tracked files of the code checkout were modified (``code_dirty``;
+    untracked files are ignored, and ``GIT_OPTIONAL_LOCKS=0`` keeps the check from touching the git index), the version
+    of every package in ``PROVENANCE_PACKAGES``, and the SHA-256 of the default cached weight files of the deep models in
+    the run. Anything that cannot be determined is ``NOT_RECORDED``; this function NEVER raises, because a provenance
+    problem must not cost a multi-hour run its results. It changes no result and no manifest or content hash."""
+    nr = sm.NOT_RECORDED
+    out: dict[str, Any] = {"platform": nr, "machine": nr, "code_dirty": nr, "packages": {}, "weights": {}}
+    try:
+        out["platform"], out["machine"] = platform.platform(), platform.machine()
+    except Exception:
+        pass
+    try:
+        env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+        st = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True,
+                            timeout=30, check=True, env=env)
+        out["code_dirty"] = bool(st.stdout.strip())
+    except Exception:
+        pass
+    for pkg in PROVENANCE_PACKAGES:
+        try:
+            out["packages"][pkg] = importlib_metadata.version(pkg)
+        except Exception:
+            out["packages"][pkg] = nr
+    for name in sorted({m for m in model_names if m in ("facenet", "arcface")}):
+        try:
+            files = _weight_files(name)
+            out["weights"][name] = ({f.name: _file_sha256(f) for f in files} if files else nr)
+        except Exception:
+            out["weights"][name] = nr
+    return out
 
 
 def dataset_fingerprint(records) -> str:
@@ -791,6 +855,7 @@ def _run_fold0_verification(
             "pairs": {p: pair_content_sha256(ps) for p, ps in pair_sets.items()},
         },
         "environment": {k: metadata[k] for k in ("python_version", "numpy_version", "code_version")},
+        "provenance": run_provenance(model_names),
         "fold": FOLD_INDEX, "k_folds": K_FOLDS, "seed": seed,
         "manifest_path": str(manifest_path), "manifest_sha256": manifest_sha,
         "shuffled_order": shuffled_cmp,
