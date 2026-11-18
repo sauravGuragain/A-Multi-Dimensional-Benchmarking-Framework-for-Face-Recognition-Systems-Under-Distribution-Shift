@@ -73,10 +73,10 @@ Recorded values (accuracy %; `results` should show the same):
 
 ### 4b. Fold-0 verification, discussed separately
 
-Say: "This is a different protocol. It asks whether two photos show the same person, on people never seen in training, with a threshold frozen on validation pairs. It is supplementary evidence of the implementation's rigour, not part of the 36-row comparison."
+Say: "This is a different protocol. It asks whether two photos show the same person, on people never seen in training, with a threshold frozen on validation pairs. The split is our own custom identity-disjoint Fold 0, not the official LFW View 2 protocol, so I do not compare it with published View 2 numbers. It is supplementary evidence of the implementation's rigour, not part of the 36-row comparison."
 
-- Committed results: four classical models over 16 perturbations x 6 severities (`reports/experiment_results/`; Fisherfaces, LBPH, HOG-SVM 288 rows; Eigenfaces 96 rows; one historical Eigenfaces variant is not to be combined).
-- FaceNet and ArcFace were checked on the clean condition only (2 rows); that confirms their real backbones, not robustness.
+- Committed results: four classical models over 16 perturbations x 6 severities (`reports/experiment_results/`; Fisherfaces, LBPH, HOG-SVM 288 rows; Eigenfaces 96 rows; the separate historical per-image-noise run `c408e0d2` is not to be combined).
+- FaceNet and ArcFace were checked on the clean condition only (2 rows); that confirms their real backbones, not robustness. Full Fold-0 perturbation verification is not completed.
 - Show the manifest SHA-256 in the README as a reproducibility feature. Do not put identification and verification numbers in one table.
 
 ## 5. Capability versus validation (slide)

@@ -9,18 +9,18 @@ Written 2026-11-18. This file records **only evidence that exists**. Every fact 
 | **NOT RECORDED** | The run or the project never saved this information. It is not guessed and not reconstructed. |
 | **NEEDS NEW RUN** | Could only be established by running something new. Not part of the thesis scope. |
 
-## 1. Two protocols, never to be mixed
+## 1. Two protocols, never to be mixed (and Fold-0 is custom)
 
-| | Closed-set **identification** | Identity-disjoint **verification** (Fold 0) |
+| | Closed-set **identification** | Identity-disjoint **verification** (custom Fold 0) |
 |---|---|---|
 | Question | Whose face is this, among known people? | Are these two faces the same person? |
 | Split | Image-level stratified (the same people appear in training and test) | Identity-disjoint (test people are never seen in training) |
 | Decision | Classifier or nearest enrolled centroid | Similarity threshold frozen on validation pairs |
 | Metrics | Top-1 accuracy, F1 | Balanced accuracy, TAR, FAR, EER, AUC |
 | Config key | `evaluation_protocol: identification` (default) | `lfw_fold0_verification` |
-| Runs | 2bad8efd (primary), fe4696ee (superseded), 69878560 (invalid) | 5ecfdd99, a55a4a37, c408e0d2, b8fbb5c3, c069be84 |
+| Runs | 2bad8efd (primary), fe4696ee (superseded), 69878560 (invalid) | 5ecfdd99, a55a4a37, b8fbb5c3, c069be84; plus `c408e0d2`, a **separate per-image-noise run** (see section 4) |
 
-"Accuracy" under one protocol is not comparable with "accuracy" under the other. Published LFW numbers (about 99%) are verification numbers.
+"Accuracy" under one protocol is not comparable with "accuracy" under the other. Published LFW numbers (about 99%) are verification numbers on the **official LFW View 2 protocol**. The Fold-0 protocol used here is this project's own custom identity-disjoint split (`reports/experiment_results/README.md`: "Custom identity-disjoint Fold 0", full LFW, seed 42, 10 folds, threshold chosen on clean validation pairs and frozen). It is **not** the official View 2 protocol, so its numbers must not be compared with published View 2 results either.
 
 ## 2. Primary result: run 2bad8efd (the thesis experiment)
 
@@ -33,7 +33,7 @@ Written 2026-11-18. This file records **only evidence that exists**. Every fact 
 | Models | Eigenfaces, HOG-SVM, FaceNet, ArcFace | MAC (reported) |
 | Perturbations / severities | Gaussian blur, rotation, brightness / 0.0, 0.5, 1.0 | MAC (reported); mappings REPO |
 | Result rows / test samples | 36 rows / 1,357 samples | MAC (reported) |
-| Config base | `configs/lfw_intermediate.yaml` (REPO) plus a local, untracked `configs/lfw_intermediate_rerun.yaml` (new names, `require_real_models: true`) | MAC (reported) |
+| Config base | `configs/lfw_intermediate.yaml` (REPO) and `configs/lfw_intermediate_rerun.yaml` (new names, `require_real_models: true`), which is **committed in the delivery PR**. Byte-for-byte identity of the committed file with the configuration file used for the historical run cannot be independently verified: the run database stores a `config_hash` of the configuration object, not a hash of the YAML file, and no file hash was recorded. | REPO (committed file); identity with the historical file NOT RECORDED |
 | Seed and split | seed 42; test 0.30; validation 0.10; at least 8 images per subject; 2,734 / 461 / 1,357 images | REPO (config); split sizes MAC (reported) |
 | Runtime and memory | 3,492 s (about 58 minutes), peak RSS about 3.56 GB, no swapping; ArcFace on CPU | MAC (reported, from the pasted terminal log) |
 | Result files | `reports/lfw_intermediate_rerun/{evaluation_results,fingerprints,failure_clusters,deployment_rankings}_2bad8efd2ac0468cb1bf54fc517e7119.csv` on the Mac. **Not in Git.** | MAC (reported) |
@@ -76,7 +76,7 @@ It is read-only. It reads the database from a temporary copy made in the system 
 |---|---|---|---|
 | `5ecfdd995ffc4e528b0c17563798a7d4` (`lfw_fold0_classical`): Fisherfaces, LBPH, HOG-SVM; 288 rows = 16 x 6 x 3 | Fold-0 verification | COMPLETE, failures 0, stub 0; code commit `34608f4eb8f1e073c254d53cbae9e64c82150710`; manifest SHA-256 `d36e8ae060eae1bea9df663351b00f44f5156330c06f55ad77234ef8fc7bdd05` (the committed sidecar `split_manifest_fold0.tsv.sha256` contains the same hash) | REPO: `reports/experiment_results/classical/`, README; also a local DB record |
 | `a55a4a37f1664bf89bb2987f01c45683`: Eigenfaces final; 96 rows | Fold-0 verification | COMPLETE; same manifest and commit as the row above | REPO: `reports/experiment_results/eigenfaces_final/` |
-| `c408e0d2352e4de780a9d7a45a3ae7cc`: Eigenfaces per-image noise; 96 rows | Fold-0 verification | Historical; different manifest and code version; do not combine | REPO: `reports/experiment_results/eigenfaces_per_image_noise/` |
+| `c408e0d2352e4de780a9d7a45a3ae7cc`: Eigenfaces **per-image-noise run**; 96 rows | Separate per-image-noise run on the custom Fold-0 setup | Historical; different manifest (SHA-256 `3c1cf7a77791a2c42cdf05f5115594fefb904cc602f3be5a77249f967b0a7116`) and code commit `e0d0eae8444e93b6110740aae81442385048316b`; do not combine with other runs. The archive README lists the noise protocol `per_image_v2` once, in its general reproducibility section, and does not state separately which runs it applies to: NOT RECORDED. | REPO: `reports/experiment_results/eigenfaces_per_image_noise/` |
 | `b8fbb5c3` (`lfw_fold0_deep_clean_check`): FaceNet, ArcFace; 2 rows, clean only | Fold-0 verification | COMPLETE, failures none, per the 2026-11-15 handoff; present in the local database | REPO: `docs/experiment_records/2026-11-15_session_handoff.md`; MAC (reported) |
 | `c069be84b7f84008a2b90975d384d8bf`: FaceNet, ArcFace; 2 rows, clean only ("v2") | Fold-0 verification | COMPLETE, stub 0; commit `930b49d96a39ce3de4bc072758eb842c3f981a51`; validation balanced accuracy FaceNet 0.9905, ArcFace 0.9956 (validation, not test) | REPO: `docs/experiment_records/lfw_fold0_deep_clean_check_v2.md` |
 | `fe4696ee986c43f8b7920c5a5416f20f` (`lfw_intermediate_scale_validation`) | Identification (same design as the primary run) | **Superseded.** FaceNet numbers came from preprocessing and perturbation defects (clean 61.6% versus 99.78% in the rerun); other values also differ in places. Never place its numbers beside 2bad8efd. | REPO: `reports/lfw_intermediate_scale_validation/`; MAC (reported) as completed |
@@ -98,7 +98,8 @@ Only focused checks were run for this delivery. The full suite was **not** rerun
 | `tests/test_perturbation_value_range.py`: 386 passed (an earlier focused run). | cloud, not the Mac |
 | `run_faceeval.sh` read-only commands (`help`, `check`, `results`, `results 2bad8efd`, `evidence`, `evidence 2bad8efd`): a hash, size and modification-time snapshot of the whole scratch tree, including hidden files and `.git`, was identical before and after, with a clean WAL-mode database and with a database held open by a live writer (`-wal` and `-shm` present). Scratch tree used **fixture data**, not your results. | cloud, not the Mac |
 | Exit status through the tee and awk pipeline is propagated (child exit 0 -> 0, 3 -> 3) and the `PREDICTIONS DEBUG` filter hides lines on screen but not in the log. | cloud, not the Mac |
-| `bash -n run_faceeval.sh`, `help`, `check` (0 warnings), `results 2bad8efd`, and `evidence 2bad8efd` all succeeded on the maintainer's macOS Bash 3.2. Experiment-starting commands and clean-machine installation have not been independently verified. | MAC (reported) |
+| `bash -n run_faceeval.sh`, `help`, `check` (0 warnings), `results 2bad8efd` and `evidence 2bad8efd` succeeded on the maintainer's macOS Bash 3.2. The SHA-256 of the file tested is **NOT RECORDED**. Experiment-starting commands and clean-machine installation have not been verified. | MAC (reported) |
+| SHA-256 of `run_faceeval.sh` as committed in `4a9788282b9b3ab91ccd10d935644671cba18d3e`: `4c621819991195d59255b772216a5f8cb5539c1cb60eb59022f890f283132637`, computed from the GitHub source by the reviewer in a Linux sandbox. If `shasum -a 256 run_faceeval.sh` on the Mac prints a different value, the Mac-tested file was a different build. | REPO (derived); not a Mac result |
 
 ## 6. Capability versus validation
 
@@ -121,6 +122,8 @@ Placeholders (0.5 in every output; not findings): robustness (the runner does no
 | The deployment scorer receives no fingerprints, so the robustness dimension is 0.5 for every model. | Fixing it changes future outputs. The thesis states the ranking is accuracy-driven. |
 | `ReportGenerator.export_json` exists, but the runner does not call it: it logs "JSON export requested but not yet implemented." No JSON report is produced by a run. | Wiring it adds a failure point after an hour-long run, and the thesis needs no JSON. |
 | The environment snapshot (Python, packages, hardware) is captured at setup, but only the platform line is logged; it is not stored in the run record. The run records the short git commit but no dirty flag. | Explains the NOT RECORDED entries above. |
+| `lfw_intermediate_rerun.yaml` sets `compute_calibration`, `compute_fairness` and `profile_resources` (and its description text speaks of fairness computation). These flags and the description were inherited from `lfw_intermediate.yaml`. The three inherited flags are **not consumed** by `ExperimentRunner`. Of the `compute_*` and `export_*` flags, the runner reads only `compute_fingerprints`, `compute_deployment_scores`, `export_csv` and `export_json`. No calibration, fairness or resource result exists for the thesis run. | The YAML is left unchanged so that it stays what it is; this note is the correction. |
+| `ExperimentTracker` (MLflow) is defined but the runner never creates it; `mlflow_tracking_uri` is only copied into the configuration object. A run does not start MLflow tracking. | Documented, not changed. |
 | `BasePerturbation.apply` returns an exact copy at severity 0.0; brightness 0.5 is the identity. | By design and covered by `test_perturbation_value_range.py`; the thesis now says so. |
 | Docstrings said HOG length about 2,916 (actual 8,100) and ArcFace `buffalo_l` ResNet-100 (actual recognition model ResNet-50, `w600k_r50`). | **Fixed** in this change (comments and one description string only). Result CSVs are untouched; the thesis text was corrected in parallel. |
 
@@ -129,7 +132,7 @@ No source change in this delivery alters the meaning of any completed result.
 ## 8. Evidence block from `./run_faceeval.sh evidence 2bad8efd`
 
 ```
-NOT YET PASTED. Run the command on the Mac and paste its output here.
+NOT YET PASTED. The maintainer reports that the command succeeded on the Mac, but its output is not available to this record. Paste it here if you want the recorded commit, config_hash, seed and timing of 2bad8efd on record. Until then those values are NOT RECORDED in this document.
 ```
 
 ## 9. Evidence that would require a new run (not planned, not needed for the thesis claims)

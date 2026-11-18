@@ -43,7 +43,7 @@ export FACEEVAL_VENV=/path/to/your/venv
 
 ## 3. Make the script runnable (once)
 
-The runner is delivered as a separate file, `run_faceeval.final.sh`, so that it never overwrites a runner you already have. Review it first (`diff run_faceeval.sh run_faceeval.final.sh | less`). If you accept it, copy it into the project folder as `run_faceeval.sh` (keep a backup of the old one). The commands below assume the final runner is installed under that name. If you prefer to leave your own runner in place, replace `./run_faceeval.sh` with `./run_faceeval.final.sh` in every command in this guide; the script works under any file name.
+The runner is `run_faceeval.sh` in the project root.
 
 
 ```bash
@@ -77,7 +77,7 @@ Prints what the run recorded about itself in its database (timestamps, duration,
 
 **Which protocol is this?** `results` shows **closed-set identification**: each test face is assigned to one of 200 known people; "accuracy" is the share assigned correctly. This is the thesis experiment.
 
-**Verification (Fold 0) is different.** Verification asks "are these two photos the same person?" using pairs of images and a decision threshold, on people never seen in training. Its numbers (TAR, FAR, balanced accuracy) live in `reports/experiment_results/` and are described in its README. Never compare an identification accuracy with a verification accuracy, and never put them in one table.
+**Verification (custom Fold 0) is different.** Verification asks "are these two photos the same person?" using pairs of images and a decision threshold, on people never seen in training. The split is this project's own identity-disjoint "Fold 0"; it is **not the official LFW View 2 protocol**, so it must not be compared with published View 2 numbers. Its numbers (TAR, FAR, balanced accuracy) live in `reports/experiment_results/` and are described in its README. Never compare an identification accuracy with a verification accuracy, and never put them in one table.
 
 | Term | Meaning |
 |---|---|
@@ -97,7 +97,7 @@ Recorded values of run `2bad8efd` (accuracy %, reported from your Mac; `results`
 | FaceNet | 99.8 | 1.0 | 77.3 | 98.0 |
 | ArcFace | 99.6 | 0.2 | 99.6 | 99.3 |
 
-A difference of a few images (FaceNet 99.8% versus ArcFace 99.6% is three images) is not meaningful.
+A difference of a few images is not meaningful: with the recorded clean accuracies (FaceNet 99.78% = 1,354 of 1,357 images, ArcFace 99.63% = 1,352 of 1,357) the two models differ by two images.
 
 ## 6. What the project contains (one minute)
 
@@ -113,7 +113,11 @@ A difference of a few images (FaceNet 99.8% versus ArcFace 99.6% is three images
 
 ## 7. Dependencies, weights and data (only needed if you start experiments)
 
-- Packages: `pip install -e ".[deep]"` in a fresh virtual environment (Python 3.11+). `facenet-pytorch` pins a `torch` range; if pip complains, keep your existing working environment.
+- Packages: `pip install -e ".[deep]"` in a fresh virtual environment.
+  - **Use Python 3.11 or 3.12.** The `deep` extra installs `facenet-pytorch` (version 2.6.0 on PyPI when checked on 2026-11-18), which requires `torch>=2.2,<2.3`, `torchvision<0.18` and `numpy<2`. No torch 2.2.x wheel exists for Python 3.13 or 3.14 on macOS arm64, so the install is expected to fail there. `pyproject.toml` declares only `requires-python >= 3.11` and was not changed.
+  - A clean-machine installation has **not** been tested.
+  - Recorded interpreter evidence is limited: `reports/experiment_results/README.md` records Python 3.12.14 and NumPy 1.26.4 for the Fold-0 results archive. The interpreter used for run `2bad8efd` and for the other runs is NOT RECORDED.
+  - If pip complains, keep your existing working environment.
 - Dataset: `data/lfw/<Person_Name>/<Person_Name>_0001.jpg`, directly under `data/lfw/` (not `data/lfw/lfw/`). Override the location with `export FACEEVAL_DATA=/path/to/data`.
 - Weights: FaceNet (VGGFace2) in `~/.cache/torch/checkpoints/`; ArcFace (`buffalo_l`, recognition model ResNet-50) in `~/.insightface/models/buffalo_l/`. They download on first use of a deep model; `check` only looks.
 
@@ -147,8 +151,9 @@ Repeats the thesis experiment configuration (`configs/lfw_intermediate.yaml`). I
 |---|---|
 | `permission denied: ./run_faceeval.sh` | `chmod +x run_faceeval.sh` |
 | `No such file or directory` for the script | You are in the wrong folder. Use `pwd` to see where you are and `cd` to the project (section 1). |
-| `No Python environment found` | Set `export FACEEVAL_VENV=...` (section 2) or create one: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[deep]"` |
-| `[FAIL] facenet-pytorch missing` / `insightface missing` | Only matters for deep runs. `pip install -e ".[deep]"`, or use `demo --classical`. Reading results is unaffected. |
+| `No Python environment found` | Set `export FACEEVAL_VENV=...` (section 2) or create one with Python 3.11 or 3.12: `python3.12 -m venv .venv && source .venv/bin/activate && pip install -e ".[deep]"` (if Python 3.11 is the version you have installed, use `python3.11 -m venv .venv` instead of `python3.12 -m venv .venv`) |
+| `[FAIL] facenet-pytorch missing` / `insightface missing` | Only matters for deep runs. `pip install -e ".[deep]"` with Python 3.11 or 3.12, or use `demo --classical`. Reading results is unaffected. |
+| `pip install -e ".[deep]"` fails resolving `torch` | The environment is probably Python 3.13 or 3.14, for which `facenet-pytorch`'s torch pin has no wheels. Use Python 3.11 or 3.12. |
 | `[WARN] weights not cached` | Fine for `check`. A deep run would download them. |
 | `LFW dataset not found` | Create or link `data/lfw/...`, or set `FACEEVAL_DATA`. |
 | `nested layout` failure | The people folders are in `data/lfw/lfw/`; move them up one level. |
@@ -157,7 +162,7 @@ Repeats the thesis experiment configuration (`configs/lfw_intermediate.yaml`). I
 | A run stops with a stub or "Preflight failed" message | Working as designed: a real backbone is unavailable. Fix the install; never remove `require_real_models`. |
 | Run is slow | ArcFace uses the CPU on a Mac. Plug in the laptop; `caffeinate` keeps it awake. |
 | Lots of `PREDICTIONS DEBUG` lines | Hidden on screen; present in the log file in `logs/`. |
-| `mlflow` warnings | Tracking is optional; results are still saved. |
+| `mlflow` messages | `demo` and `full` do not start MLflow tracking, so no MLflow warnings are expected while they run. `check` imports `mlflow` only to report its version; any message printed at that point comes from the package itself and does not affect results. |
 | Disk full | Delete old folders under `runs/` yourself; the script never deletes anything. |
 
 ## 10. Optional: API and dashboard

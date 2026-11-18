@@ -11,8 +11,9 @@ It is the software foundation of the thesis project, *Multi-dimensional benchmar
 | Area | Status |
 |---|---|
 | Primary thesis experiment: LFW, 200 subjects, closed-set identification, Eigenfaces / HOG-SVM / FaceNet / ArcFace, Gaussian blur / rotation / brightness at severities 0.0, 0.5, 1.0 (36 conditions, 1,357 test images) | **Completed.** Run `2bad8efd2ac0468cb1bf54fc517e7119` (result files are on the maintainer's machine, not in Git). See `docs/EXPERIMENT_EVIDENCE_RECORD.md`. |
-| Fold-0 verification (identity-disjoint pairs, TAR/FAR) for Eigenfaces, Fisherfaces, LBPH, HOG-SVM over 16 perturbations x 6 severities | **Completed** (`reports/experiment_results/`). A different protocol; never combine with identification numbers. |
-| FaceNet / ArcFace on Fold-0 | Clean condition only |
+| Custom Fold-0 verification (identity-disjoint pairs, TAR/FAR) for Eigenfaces, Fisherfaces, LBPH, HOG-SVM over 16 perturbations x 6 severities | **Completed** (`reports/experiment_results/`). This is the project's own identity-disjoint split (see its README: "Custom identity-disjoint Fold 0"), **not the official LFW View 2 protocol**, so its numbers are not comparable with published View 2 results. A different protocol from identification; never combine them. |
+| `c408e0d2...` Eigenfaces per-image-noise run | A **separate, historical** run with a different manifest and code version. Keep its results apart from the other Fold-0 runs. |
+| FaceNet / ArcFace on custom Fold-0 | Clean condition only. **Full Fold-0 perturbation verification is not completed** (no deep model has been run under perturbation). |
 | Earlier identification runs `fe4696ee...` and `69878560...` | **Superseded.** Defective FaceNet preprocessing / non-real ArcFace. Kept only as audit history. |
 | PCA+SVM, k-NN, InsightFace, dlib models | Implemented, **never run on LFW** |
 | Calibration, fairness, speed, memory, sample efficiency | Code present, **not evaluated**. Scores are placeholders (0.5). |
@@ -28,8 +29,8 @@ It is the software foundation of the thesis project, *Multi-dimensional benchmar
 | **Implemented** | The code exists in this repository. |
 | **Executed** | An experiment actually ran to completion (only the runs listed above). |
 | **Verified on the maintainer's Mac (reported)** | The maintainer reports it from their own machine: the 983-test full suite (commit not recorded), the 2bad8efd run, and the `results` view of that run. |
-| **Verified in Linux cloud sandbox and macOS** | The runner's exhaustive read-only non-mutation guarantees and focused tests were verified in a Linux cloud sandbox. The runner's syntax and four read-only commands were also successfully checked on macOS. |
-| **Verified on macOS (read-only commands)** | `bash -n run_faceeval.sh`, `help`, `check` (0 warnings), `results 2bad8efd`, and `evidence 2bad8efd` all succeeded on the maintainer's macOS Bash 3.2. Experiment-starting commands and clean-machine installation have not been independently verified. |
+| **Verified in a Linux cloud sandbox (not the Mac)** | Focused tests and the runner's read-only behaviour: whole-tree before/after snapshots on fixture data for six commands and two database states (`docs/EXPERIMENT_EVIDENCE_RECORD.md` section 5). These do not establish success on macOS. |
+| **Reported as run on the maintainer's macOS (Bash 3.2)** | The maintainer reports that `bash -n run_faceeval.sh`, `help`, `check` (0 warnings), `results 2bad8efd` and `evidence 2bad8efd` succeeded. The SHA-256 of the file that was tested is NOT RECORDED. The SHA-256 of the committed `run_faceeval.sh` is given in the evidence record, section 5. Experiment-starting commands and a clean-machine installation have not been verified. |
 | **Planned / proposed only** | A repeat of the thesis run, FaceNet/ArcFace over the 16 x 6 grid, the 10-model benchmark, calibration/fairness/speed/memory studies, a clean-machine install. **None has been executed.** |
 
 **Reduced scope of the thesis validation:** 200 of 5,749 subjects (3.5%), 4 of 10 models, 3 of 16 perturbations, 3 of 6 severity levels. One run, one split, seed 42, no confidence intervals.
@@ -40,7 +41,9 @@ It is the software foundation of the thesis project, *Multi-dimensional benchmar
 
 ```bash
 git clone <this repository> && cd <repository folder>
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate   # recommended: Python 3.12 (3.11 is also fine; see the note below)
+# If Python 3.11 is the version you have installed, use it instead:
+#   python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[deep]"          # core + FaceNet/ArcFace packages
 # put LFW at data/lfw/<Person_Name>/<Person_Name>_0001.jpg  (see docs/USER_GUIDE.md)
 chmod +x run_faceeval.sh
@@ -52,7 +55,7 @@ chmod +x run_faceeval.sh
 
 Full instructions, dependencies, model weights, troubleshooting: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**. Presentation material: **[docs/PRESENTATION_GUIDE.md](docs/PRESENTATION_GUIDE.md)**.
 
-A clean-machine installation has not yet been independently verified. The thesis runs used Python 3.12 in an existing virtual environment.
+**Python version for the `deep` extra: use Python 3.11 or 3.12.** The extra installs `facenet-pytorch`, whose PyPI metadata (checked on 2026-11-18, version 2.6.0) requires `torch>=2.2,<2.3`, `torchvision<0.18` and `numpy<2`. No torch 2.2.x wheel exists for Python 3.13 or 3.14 on macOS arm64, so `pip install -e ".[deep]"` is expected to fail there. The core package declares `requires-python >= 3.11`; `pyproject.toml` is unchanged. A clean-machine installation has **not** been tested. Recorded interpreter evidence is limited: `reports/experiment_results/README.md` records Python 3.12.14 and NumPy 1.26.4 for the Fold-0 results archive; the interpreter used for run `2bad8efd` and for the other runs is NOT RECORDED.
 
 ## The runner script
 
