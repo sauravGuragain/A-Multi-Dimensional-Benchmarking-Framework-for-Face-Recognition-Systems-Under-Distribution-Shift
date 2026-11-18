@@ -28,6 +28,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Real FaceNet / ArcFace backbones. Without these the deep wrappers fall back to stubs
+# unless the experiment config sets require_real_models: true (which then stops the run).
+deep = [
+    "facenet-pytorch",
+    "insightface",
+    "onnxruntime",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",

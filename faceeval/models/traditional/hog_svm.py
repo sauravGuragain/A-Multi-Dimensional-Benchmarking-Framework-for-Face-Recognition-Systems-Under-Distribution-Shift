@@ -15,7 +15,7 @@ Optimal for 128×128 face images (our default for HOG):
   pixels_per_cell = (8, 8)
   cells_per_block = (2, 2)
   orientations    = 9
-  → feature vector length ≈ 2916 for 128×128 (resized from pipeline output)
+  → feature vector length 8100 for 128×128 (9 orientations, 8×8-pixel cells, 2×2-cell blocks)
 
 KNN (k-Nearest Neighbour)
 --------------------------
