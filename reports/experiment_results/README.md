@@ -75,3 +75,21 @@ comparative results.
 8. Identify remaining experiments and resource requirements.
 
 Do not fabricate metrics or claim unperformed experiments.
+
+## 5. Deep-model runs and six-model analysis (not archived in this folder)
+
+Added 2026-11-19. The archives above are the four classical models. The two deep-model Fold-0 sweeps use the same
+protocol (custom identity-disjoint Fold 0, 16 perturbations x 6 severities = 96 conditions per model) but are NOT
+stored here or anywhere in Git; they are on the maintainer's machine:
+
+- FaceNet: run `b567f88089c142d3b7732d993f34c979`, 96/96 conditions (reported by the maintainer).
+- ArcFace: run `4bdf6982668f4f498fa3fe36d41c885b`, 96/96 conditions (reported by the maintainer).
+
+Together with the four classical models they form the six-model benchmark (576 primary rows). The analysis command is
+`python -m faceeval.analysis.fold0_results --results-root reports/experiment_results --facenet-run DIR --arcface-run DIR --out NEW_DIR`
+(see the top-level README). Its output (13 tables, 7 figures, `provenance.json`) is a local artifact and is not committed.
+
+Deep-model values are end-to-end: a failed embedding is a zero vector and its pairs are still scored, not removed, so
+ArcFace AUC/EER are not valid-pairs-only performance. FaceNet (centre crop, no detector) and ArcFace (detector plus
+5-point alignment) use different preprocessing pipelines. Brightness, contrast and gamma are centred at severity 0.5.
+This protocol is different from, and never merged with, the 200-subject identification experiment (run `2bad8efd`).

@@ -77,7 +77,7 @@ Prints what the run recorded about itself in its database (timestamps, duration,
 
 **Which protocol is this?** `results` shows **closed-set identification**: each test face is assigned to one of 200 known people; "accuracy" is the share assigned correctly. This is the thesis experiment.
 
-**Verification (custom Fold 0) is different.** Verification asks "are these two photos the same person?" using pairs of images and a decision threshold, on people never seen in training. The split is this project's own identity-disjoint "Fold 0"; it is **not the official LFW View 2 protocol**, so it must not be compared with published View 2 numbers. Its numbers (TAR, FAR, balanced accuracy) live in `reports/experiment_results/` and are described in its README. Never compare an identification accuracy with a verification accuracy, and never put them in one table.
+**Verification (custom Fold 0) is different.** Verification asks "are these two photos the same person?" using pairs of images and a decision threshold, on people never seen in training. The split is this project's own identity-disjoint "Fold 0"; it is **not the official LFW View 2 protocol**, so it must not be compared with published View 2 numbers. Its numbers (TAR, FAR, balanced accuracy) for the four classical models live in `reports/experiment_results/` and are described in its README. The FaceNet and ArcFace Fold-0 results (96 conditions each) are on the maintainer's Mac and are not in Git (section 5b). Never compare an identification accuracy with a verification accuracy, and never put them in one table.
 
 | Term | Meaning |
 |---|---|
@@ -99,6 +99,24 @@ Recorded values of run `2bad8efd` (accuracy %, reported from your Mac; `results`
 
 A difference of a few images is not meaningful: with the recorded clean accuracies (FaceNet 99.78% = 1,354 of 1,357 images, ArcFace 99.63% = 1,352 of 1,357) the two models differ by two images.
 
+## 5b. The six-model Fold-0 analysis (read-only on archived files)
+
+The Fold-0 verification benchmark covers six models (Eigenfaces, Fisherfaces, LBPH, HOG-SVM, FaceNet, ArcFace) over 16 perturbations x 6 severities. The analysis tool reads the archived result files, runs no experiment, loads no model and does not need the dataset. It writes only into the **new** folder you name:
+
+```bash
+python -m faceeval.analysis.fold0_results \
+    --results-root reports/experiment_results \
+    --facenet-run <FACENET_VERIFICATION_RUN_DIR> \
+    --arcface-run <ARCFACE_VERIFICATION_RUN_DIR> \
+    --out <NEW_OUTPUT_DIRECTORY>
+```
+
+Use the Python from your environment (section 2). `--facenet-run` and `--arcface-run` each point to a run directory that contains `verification_results.csv` and `verification_results.json` (under `runs/` on your Mac, not under the results root). `--out` must be a new or empty folder (`--overwrite` allows a non-empty one). If a check fails the tool prints `ANALYSIS REFUSED: ...` and writes nothing into the archives.
+
+Result: `tables/` (13 CSV files), `figures/` (7 PNG files with the deep runs; 6 without them, because the failure-rate figure needs deep-model results) and `provenance.json`. **These outputs are local artifacts and are not committed to Git**; `reports/` is git-ignored.
+
+How to read the deep-model rows: they are **end-to-end** results. When no embedding can be produced for an image (mainly ArcFace's face detector finding no face), it becomes a zero vector and its pairs are **still scored**, not removed. So ArcFace AUC and EER include detection failures; see `table12`, `table13` and figure 7 for the failure counts and rates. FaceNet and ArcFace also differ in crop or alignment, input size and detection, so the comparison is between pipelines, not between backbones. Brightness, contrast and gamma are centred at severity 0.5, so their curves are V-shaped. Never mix these Fold-0 results with the identification results of section 5.
+
 ## 6. What the project contains (one minute)
 
 | Folder | Purpose |
@@ -106,7 +124,7 @@ A difference of a few images is not meaningful: with the recorded clean accuraci
 | `faceeval/` | the Python package: data, models, perturbations, evaluation, scoring, orchestration |
 | `configs/` | YAML files that define experiments |
 | `tests/` | automated tests |
-| `reports/` | committed result files of earlier experiments |
+| `reports/` | tracked historical result files; newly generated analysis outputs are generally git-ignored and stay local |
 | `docs/` | this guide, the presentation guide, the evidence record |
 | `runs/`, `logs/` | created only when you start an experiment with the script |
 | `data/` | the LFW images (not in Git) |

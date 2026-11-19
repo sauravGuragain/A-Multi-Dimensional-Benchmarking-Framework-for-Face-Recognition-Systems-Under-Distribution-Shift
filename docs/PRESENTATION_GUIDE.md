@@ -4,7 +4,7 @@ Everything below uses **existing** results. You do not need to start any experim
 
 ## 0. One-sentence pitch
 
-"FaceEval-X is a configuration-driven framework that measures how face recognition models behave under image degradation. Clean accuracy hides failure modes; I show this with a 200-subject LFW validation of four models, and I keep a separate verification protocol as supplementary evidence."
+"FaceEval-X is a configuration-driven framework that measures how face recognition models behave under image degradation. Clean accuracy hides failure modes; I show this with a 200-subject LFW identification validation of four models, and I keep a separate custom verification benchmark (six models, 16 perturbations x 6 severities) as supplementary evidence."
 
 ## 1. Preparation (day before; all read-only)
 
@@ -12,6 +12,7 @@ Everything below uses **existing** results. You do not need to start any experim
 2. Increase the terminal font size, plug in the laptop, turn off notifications.
 3. Open `configs/lfw_intermediate.yaml` and `reports/experiment_results/README.md` in a text editor for later.
 4. Optional (not an experiment): run `pytest tests/test_perturbation_value_range.py -q` once so you know it passes on your machine. The full suite is not needed.
+5. Optional: if you want to show Fold-0 figures, open the local six-model analysis output folder (the one you passed to `--out`). It is a **local artifact, not in Git**; check on your Mac that it is there and has 13 tables and 7 figures. Do not regenerate it live.
 
 ## 2. Sequence
 
@@ -23,7 +24,7 @@ Everything below uses **existing** results. You do not need to start any experim
 | 4–8 | The 36-row experiment | `./run_faceeval.sh results` | section 4 below |
 | 8–9 | One file defines it | `less configs/lfw_intermediate.yaml` (`q` to quit) | "Models, perturbations, severities, seed 42." |
 | 9–10 | Provenance | `./run_faceeval.sh evidence 2bad8efd` | "The run recorded its commit, configuration hash and timing. What it did not record, I label NOT RECORDED." |
-| 10–11 | Fold-0 (separately) | open `reports/experiment_results/README.md` | section 4b below |
+| 10–11 | Fold-0 (separately) | open `reports/experiment_results/README.md`; optionally the local six-model analysis figures | section 4b below |
 | 11–12 | Limits | limitations slide (section 6) | say them before you are asked |
 
 ## 3. Architecture and how the pieces work
@@ -76,7 +77,11 @@ Recorded values (accuracy %; `results` should show the same):
 Say: "This is a different protocol. It asks whether two photos show the same person, on people never seen in training, with a threshold frozen on validation pairs. The split is our own custom identity-disjoint Fold 0, not the official LFW View 2 protocol, so I do not compare it with published View 2 numbers. It is supplementary evidence of the implementation's rigour, not part of the 36-row comparison."
 
 - Committed results: four classical models over 16 perturbations x 6 severities (`reports/experiment_results/`; Fisherfaces, LBPH, HOG-SVM 288 rows; Eigenfaces 96 rows; the separate historical per-image-noise run `c408e0d2` is not to be combined).
-- FaceNet and ArcFace were checked on the clean condition only (2 rows); that confirms their real backbones, not robustness. Full Fold-0 perturbation verification is not completed.
+- FaceNet and ArcFace were also run over the full 16 x 6 grid (96 conditions each, both complete, as reported from the Mac). Their result files are **not in Git**. The earlier two-row clean-only checks were only a backbone sanity check.
+- Six-model analysis: 6 models x 16 x 6 = 576 rows, 13 tables, 7 figures, generated locally by `python -m faceeval.analysis.fold0_results` (see the README); the outputs are **not committed**.
+- Say about ArcFace: "These are end-to-end results. When ArcFace's detector finds no face, the image gets a zero embedding and its pairs are still scored, not removed, so ArcFace AUC and EER include detection failures. The failure rates are in the failure tables and figure." Do not call them recognition-only numbers.
+- Say about FaceNet versus ArcFace: "They differ in crop or alignment, input size and detection as well as in backbone, so I compare pipelines, not backbones."
+- Say about brightness, contrast and gamma: "Their neutral point is near severity 0.5, so the curves are V-shaped; read them as distance from neutral."
 - Show the manifest SHA-256 in the README as a reproducibility feature. Do not put identification and verification numbers in one table.
 
 ## 5. Capability versus validation (slide)
@@ -84,16 +89,17 @@ Say: "This is a different protocol. It asks whether two photos show the same per
 | Dimension | Implemented | Validated in the thesis |
 |---|---|---|
 | Subjects | 5,749 | 200 (3.5%) |
-| Models | 10 | 4 (identification); 4 classical + 2 deep clean-only (Fold 0) |
-| Perturbations | 16 | 3 (identification); 16 for 4 classical models (Fold 0) |
-| Severities | 6-level grid | 3 levels (identification) |
+| Models | 10 | 4 (identification); 4 classical + 2 deep, 96 conditions each (Fold 0) |
+| Perturbations | 16 | 3 (identification); 16 for all 6 models (Fold 0) |
+| Severities | 6-level grid | 3 levels (identification); all 6 levels (Fold 0) |
 | Deployment dimensions | 7 | 1 populated (accuracy) |
 
 ## 6. Limitations slide (say it before you are asked)
 
 - Reduced scope as above; one run, one split, seed 42; no confidence intervals (about +/-2.7 points at 60% accuracy for n = 1,357, a lower bound).
 - Closed-set identification with an image-level split; not comparable with published LFW verification numbers.
-- Brightness: one level; darkening untested.
+- Brightness (identification run): one level; darkening untested.
+- Fold-0: custom split, not View 2; one split and one seed; brightness, contrast and gamma are centred (V-shaped curves); ArcFace values are end-to-end with failed embeddings scored as zero vectors; FaceNet and ArcFace pipelines differ; no valid-pairs-only analysis yet.
 - Calibration, fairness, latency, memory, cost not evaluated.
 - A clean-machine installation and a repeat of the run have not been shown.
 
@@ -123,4 +129,7 @@ You may mention that `demo` and `full` exist and that they start experiments, bu
 11. **Repeats or confidence intervals?** None.
 12. **Can I reproduce it?** The configuration, split and scoring arithmetic are reproducible; the run's database record stores its commit and config hash; Python and package versions, weight hashes and dataset fingerprint were not recorded at run time, and the evidence record says so.
 13. **Why not the full 10-model, 16 x 6 benchmark?** No claim in the thesis needs it; the scope is declared as an intermediate-scale validation.
-14. **What is your contribution?** A modular, config-driven framework with robustness fingerprints and context-weighted scoring, a worked validation showing that clean accuracy hides failure modes, and an audit trail that caught and replaced invalid results.
+14. **Why does ArcFace have failures but FaceNet none?** FaceNet uses a fixed centre crop and has no face-detection stage that can fail; ArcFace uses an internal face detector and a failed detection gives a zero embedding. The pairs are still scored, so the numbers are end-to-end. The counts are in the failure tables.
+15. **Is ArcFace's Fold-0 AUC its true recognition performance?** No. It includes detection failures. A valid-pairs-only analysis from the saved scores has not been done.
+16. **Can I put the identification and Fold-0 numbers together?** No. Different protocols (image-level closed-set identification versus identity-disjoint verification); they are kept apart.
+17. **What is your contribution?** A modular, config-driven framework with robustness fingerprints and context-weighted scoring, a worked validation showing that clean accuracy hides failure modes, and an audit trail that caught and replaced invalid results.
