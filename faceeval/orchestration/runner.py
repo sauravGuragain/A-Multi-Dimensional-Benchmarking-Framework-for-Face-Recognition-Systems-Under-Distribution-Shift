@@ -146,7 +146,7 @@ class ExperimentRunner:
         from faceeval.data.splitter import DatasetSplitter
         from faceeval.evaluation.metrics import compute_identification_metrics
         from faceeval.perturbation.composer import PerturbationComposer
-        from faceeval.preprocessing.pipeline import pipeline_for_model
+        from faceeval.preprocessing.pipeline import alignment_for_config, pipeline_for_model
         from faceeval.core.types import ModelParadigm, SplitStrategy
 
         config = self._config
@@ -266,7 +266,8 @@ class ExperimentRunner:
                 self._cb("evaluation", condition_count, total_conditions)
                 continue
 
-            pipeline = pipeline_for_model(model_name, skip_detection_for_pre_cropped=True)
+            pipeline = pipeline_for_model(model_name, skip_detection_for_pre_cropped=True,
+                                          alignment=alignment_for_config(model_name, self._config))
 
             # --- 3. Preprocess clean train/test arrays once per model ---
             try:
@@ -395,7 +396,10 @@ class ExperimentRunner:
     def _get_model(self, name: str):
         """Registry instance; hands out the preflight-loaded model once instead of reloading it."""
         kept = self._preflight_kept.pop(name, None)
-        return kept if kept is not None else model_registry.get(name)
+        model = kept if kept is not None else model_registry.get(name)
+        from faceeval.models.traditional.base import apply_classical_rng
+        apply_classical_rng(model, getattr(self, "_config", None))
+        return model
 
     def _preflight_models(self, model_names: list, trad_names: set) -> None:
         """Load every deep model once, before any expensive work, and require a real backbone."""
@@ -643,7 +647,7 @@ class ExperimentRunner:
                 run_id=run.run_id,
             )
 
-            reporter.build_report(run)
+            report = reporter.build_report(run)
 
             if config.export_csv:
                 reporter.export_evaluation_results_csv(
@@ -665,9 +669,17 @@ class ExperimentRunner:
                 )
 
             if config.export_json:
-                logger.info(
-                    "JSON export requested but not yet implemented."
-                )
+                # A failed JSON export must never discard an hour-long run: the CSV exports and the database
+                # record are already written, so the error is logged with its traceback and the run goes on.
+                try:
+                    vs = self.verification_summary or {}
+                    extra = ({"verification": {k: vs.get(k) for k in
+                                               ("protocol", "status", "n_rows", "fold", "seed", "manifest_sha256")}}
+                             if vs else None)
+                    json_path = reporter.export_json(report, extra=extra)
+                    logger.info("JSON report written: %s", json_path)
+                except Exception:
+                    logger.exception("JSON export failed; CSV exports and the run record are unaffected.")
 
         self._cb("post_processing", 3, 4)
         self._cb("post_processing", 4, 4)

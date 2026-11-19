@@ -290,6 +290,7 @@ def pipeline_for_model(
     *,
     normalization: NormalizationMode | str | None = None,
     crop_fraction: float | None = None,
+    alignment: str | None = None,
 ) -> PreprocessingPipeline:
     """
     Build a ``PreprocessingPipeline`` wired for a specific recognition model.
@@ -314,15 +315,28 @@ def pipeline_for_model(
     crop_fraction:
         FaceNet only: centre-crop fraction (default ``FACENET_CENTRE_CROP_FRACTION``). Passing it
         for any other model raises ``ValueError`` (no other model uses a centre crop).
+    alignment:
+        ``None`` (default) keeps every model's historical alignment. ``"dlib_chip"`` is valid for ``dlib_fr`` only and
+        selects dlib's own face chip (the geometry that network was trained on), see
+        :mod:`faceeval.preprocessing.dlib_align`. Any other value raises ``ValueError``.
     """
     if crop_fraction is not None and model_name != "facenet":
         raise ValueError(f"crop_fraction applies to 'facenet' only, not '{model_name}'")
+    if alignment not in (None, "dlib_chip"):
+        raise ValueError(f"unknown alignment {alignment!r}")
+    if alignment == "dlib_chip" and model_name != "dlib_fr":
+        raise ValueError(f"alignment='dlib_chip' applies to 'dlib_fr' only, not '{model_name}'")
     from faceeval.preprocessing.normalizer import _MODEL_TO_SIZE
     output_size = _MODEL_TO_SIZE.get(model_name, 112)
 
     detector = FaceDetector(backends=detector_backends or ["opencv_dnn", "haar", "whole_image"])
-    if model_name == "facenet":
-        aligner: FaceAligner = CentreCropAligner(
+    if alignment == "dlib_chip":
+        if detector_backends is None:                  # dlib searches the whole image itself; no framework detector first
+            detector = FaceDetector(backends=["whole_image"])
+        from faceeval.preprocessing.dlib_align import DlibChipAligner
+        aligner: FaceAligner = DlibChipAligner(output_size=output_size)
+    elif model_name == "facenet":
+        aligner = CentreCropAligner(
             output_size=output_size,
             crop_fraction=FACENET_CENTRE_CROP_FRACTION if crop_fraction is None else crop_fraction)
     else:
@@ -336,6 +350,13 @@ def pipeline_for_model(
         normalizer=normalizer,
         skip_detection_for_pre_cropped=skip_detection_for_pre_cropped,
     )
+
+
+def alignment_for_config(model_name: str, config: Any) -> str | None:
+    """The ``alignment`` argument of :func:`pipeline_for_model` that an experiment config asks for (None = historical)."""
+    if model_name == "dlib_fr" and getattr(config, "dlib_alignment", "dlib_chip") == "dlib_chip":
+        return "dlib_chip"
+    return None
 
 
 def default_pipeline(skip_detection_for_pre_cropped: bool = True) -> PreprocessingPipeline:
@@ -353,8 +374,11 @@ def default_pipeline(skip_detection_for_pre_cropped: bool = True) -> Preprocessi
 def describe_preprocessing(pipeline: PreprocessingPipeline) -> dict[str, Any]:
     """Exact, JSON-serialisable description of a pipeline's preprocessing (recorded in experiment outputs)."""
     aligner = pipeline.aligner
-    return {
+    out = {
         "normalization_mode": pipeline.normalizer.mode.value,
         "alignment": "centre_crop" if isinstance(aligner, CentreCropAligner) else "affine_fixed_landmarks",
         "crop_fraction": aligner.crop_fraction if isinstance(aligner, CentreCropAligner) else None,
     }
+    if hasattr(aligner, "describe"):                                        # e.g. DlibChipAligner: full method record
+        out.update(aligner.describe())
+    return out

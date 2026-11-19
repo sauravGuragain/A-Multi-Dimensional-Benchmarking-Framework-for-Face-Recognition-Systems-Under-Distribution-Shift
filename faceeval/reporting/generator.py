@@ -40,6 +40,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -289,10 +290,18 @@ class ReportGenerator:
     # JSON export
     # ------------------------------------------------------------------
 
-    def export_json(self, report: ExperimentReport) -> str:
-        """Export full report as JSON. Returns file path."""
+    JSON_SCHEMA_VERSION = 2
+
+    def export_json(self, report: ExperimentReport, extra: dict[str, Any] | None = None) -> str:
+        """Export the full report as JSON and return the file path.
+
+        The file is written atomically (temporary file, fsync, ``os.replace``) and re-read and parsed before the
+        function returns, so a returned path always names a complete, valid JSON file. ``extra`` (for example the
+        verification summary location) is stored under ``"extra"``.
+        """
         path = self._root / f"experiment_report_{self._run_id}.json"
         data = {
+            "schema_version": self.JSON_SCHEMA_VERSION,
             "run_id": report.run_id,
             "experiment_name": report.experiment_name,
             "generated_at": report.generated_at.isoformat(),
@@ -302,13 +311,24 @@ class ReportGenerator:
             "num_fingerprints": len(report.fingerprints),
             "num_deployment_rankings": len(report.deployment_rankings),
             "num_figures": len(report.figures),
+            "evaluation_results": [r.to_dict() for r in report.evaluation_results],
+            "failure_clusters": [c.to_dict() for c in report.failure_clusters],
             "deployment_rankings": [r.to_dict() for r in report.deployment_rankings],
             "fingerprints": [fp.to_dict() for fp in report.fingerprints],
             "figures": [f.to_dict() for f in report.figures],
+            "extra": extra or {},
         }
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
-
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            json.loads(tmp.read_text(encoding="utf-8"))          # must parse before it replaces anything
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)                           # never leave a partial file behind
+            raise
         logger.info("JSON report exported: %s", path)
         return str(path)
 

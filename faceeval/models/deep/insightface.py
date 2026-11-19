@@ -247,43 +247,16 @@ class DlibFaceRecognizer(DeepRecognizerBase):
 
     def _load_dlib_models(self, dlib: Any) -> None:
         """
-        Load dlib face recognition model weights.
+        Load the dlib recognition network from a VERIFIED file.
 
-        Looks in these locations in order:
-        1. ``self._model_path`` if provided.
-        2. ``~/.cache/dlib/dlib_face_recognition_resnet_model_v1.dat``.
-        3. Download via dlib.load_model (requires internet access).
+        The file is ``self._model_path`` if given, else ``~/.cache/dlib/dlib_face_recognition_resnet_model_v1.dat``, else
+        (unless ``FACEEVAL_NO_DOWNLOAD`` is set) downloaded over HTTPS from the pinned commit of
+        ``davisking/dlib-models``. Every file, whatever its origin, must match the pinned SHA-256 or it is refused
+        (see :mod:`faceeval.models.deep.dlib_weights`).
         """
-        import os
-        cache_dir = os.path.expanduser("~/.cache/dlib")
-        default_path = os.path.join(
-            cache_dir, "dlib_face_recognition_resnet_model_v1.dat"
-        )
-        model_path = self._model_path or default_path
-
-        if os.path.exists(model_path):
-            self._face_rec_model = dlib.face_recognition_model_v1(model_path)
-        else:
-            # Attempt to download using dlib's built-in downloader
-            os.makedirs(cache_dir, exist_ok=True)
-            try:
-                import urllib.request
-                url = (
-                    "http://dlib.net/files/"
-                    "dlib_face_recognition_resnet_model_v1.dat.bz2"
-                )
-                bz2_path = default_path + ".bz2"
-                logger.info("[%s] Downloading dlib model from %s …", self.MODEL_NAME, url)
-                urllib.request.urlretrieve(url, bz2_path)
-                import bz2
-                with bz2.open(bz2_path) as src, open(default_path, "wb") as dst:
-                    dst.write(src.read())
-                os.remove(bz2_path)
-                self._face_rec_model = dlib.face_recognition_model_v1(default_path)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Could not load or download dlib face recognition model: {exc}"
-                ) from exc
+        from faceeval.models.deep import dlib_weights as W
+        path = W.resolve(W.RECOGNITION, self._model_path)
+        self._face_rec_model = dlib.face_recognition_model_v1(str(path))
 
     def _embed(self, X: list[np.ndarray]) -> np.ndarray:
         if self._backbone is None:
@@ -304,7 +277,7 @@ class _DlibEmbedder:
             # Dlib expects RGB uint8 matrix
             if face_arr.dtype != np.uint8:
                 # float32 [0,1] RGB
-                rgb_u8 = (face_arr.clip(0, 1) * 255).astype(np.uint8)
+                rgb_u8 = np.rint(face_arr.clip(0, 1) * 255).astype(np.uint8)   # exact inverse of /255 (truncation lost 1 level)
             else:
                 rgb_u8 = face_arr
 
