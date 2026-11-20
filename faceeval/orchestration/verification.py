@@ -125,6 +125,31 @@ PROVENANCE_PACKAGES = ("torch", "torchvision", "facenet-pytorch", "insightface",
                        "opencv-python", "scikit-image", "scikit-learn", "scipy", "Pillow", "dlib")
 
 
+MAX_FAILED_EMBEDDING_FRACTION = 0.5     # a deep model whose CLEAN validation embeddings fail above this share is refused
+WARN_ALIGNMENT_FALLBACK_FRACTION = 0.10
+
+
+def _check_failed_fraction(model_name: str, valid: np.ndarray, where: str) -> None:
+    """Refuse a model whose clean embeddings mostly failed: its metrics would describe the failure, not the model."""
+    n = int(valid.size)
+    if n and (1.0 - float(valid.sum()) / n) > MAX_FAILED_EMBEDDING_FRACTION:
+        raise EmbeddingError(f"{model_name}: {n - int(valid.sum())} of {n} {where} embeddings failed "
+                             f"(> {MAX_FAILED_EMBEDDING_FRACTION:.0%}); refusing to report results for a model that mostly failed. "
+                             f"Check the model files, the detector and the preprocessing.")
+
+
+def _check_alignment_fallback(model_name: str, stats: dict, sink: dict) -> None:
+    """Record an aligner's counters in the run provenance; refuse when most images needed the fallback."""
+    sink[model_name] = dict(stats)
+    frac = float(stats.get("centre_box_fallback_fraction", 0.0))
+    if frac > float(stats.get("max_allowed_fraction", 1.0)):
+        raise EmbeddingError(f"{model_name}: {frac:.0%} of the images found no face and used the centre-box fallback "
+                             f"(allowed: {stats['max_allowed_fraction']:.0%}); refusing. Counters: {stats}")
+    if frac > WARN_ALIGNMENT_FALLBACK_FRACTION:
+        logger.warning("[%s] %.1f%% of the images used the alignment fallback; see provenance.classical_rng.dlib_alignment_stats.",
+                       model_name, 100 * frac)
+
+
 def _file_sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -700,6 +725,7 @@ def _run_fold0_verification(
     rows_out: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
     solver_used: dict[str, Any] = {}
+    alignment_stats: dict[str, Any] = {}
     # Calibration (config.compute_calibration): fitted on CLEAN VALIDATION pairs only, additive artifacts in a sibling
     # directory, never able to fail a run. verification_results.csv and the run directory are not changed by it.
     cal_rec = CalibrationRecorder() if getattr(config, "compute_calibration", False) else None
@@ -727,6 +753,8 @@ def _run_fold0_verification(
             apply_classical_rng(model, config)
             pipeline = pipeline_for_model(model_name, skip_detection_for_pre_cropped=True,
                                           alignment=alignment_for_config(model_name, config))
+            if hasattr(pipeline.aligner, "ensure_ready"):          # dlib_chip: verify the landmark weights BEFORE any work
+                pipeline.aligner.ensure_ready(strict=bool(config.require_real_models))
             prep = preprocessing[model_name] = describe_preprocessing(pipeline)
             is_deep = paradigm == "deep_learning"
             if is_deep:
@@ -745,6 +773,8 @@ def _run_fold0_verification(
             else:
                 X_test = preprocess(pipeline, img_recs["test"], raw_images)
 
+            if hasattr(pipeline.aligner, "stats"):
+                _check_alignment_fallback(model_name, pipeline.aligner.stats(), alignment_stats)
             model.fit_embedding(X_train, y_train) if not is_deep else model.fit_embedding([], y_train)
             solver_used[model_name] = getattr(getattr(model, "_extractor", None), "_fit_svd_solver", None)
             backbone = "n/a"
@@ -777,6 +807,8 @@ def _run_fold0_verification(
             if val_miss == val_miss and val_miss > 0.05:
                 logger.warning("[%s] detector missed %.1f%% of clean validation images "
                                "(scored as zero embeddings / non-matches).", model_name, 100 * val_miss)
+            if is_deep:
+                _check_failed_fraction(model_name, val_valid, "clean validation")
             thr = best_accuracy_threshold(v_scores, v_lab)
             emb_dim = int(embed(X_val[:1]).shape[1])
             val_acc = _accuracy_at(v_scores, v_lab, thr)["accuracy"]
@@ -787,7 +819,7 @@ def _run_fold0_verification(
             _fail({"protocol": "verification", "model": model_name, "stage": "setup",
                              "error": f"EmbeddingError: {exc}"})
             if config.require_real_models:
-                fatal = OrchestratorError(f"Model '{model_name}' has no real backbone and "
+                fatal = OrchestratorError(f"Model '{model_name}' cannot be used (no real backbone, or its clean inputs failed) and "
                                           f"require_real_models=true: {exc}")
                 break
             done += len(specs); progress("verification", done, total); continue
@@ -907,6 +939,7 @@ def _run_fold0_verification(
         "environment": {k: metadata[k] for k in ("python_version", "numpy_version", "code_version")},
         "provenance": {**run_provenance(model_names),
                        "classical_rng": {"protocol": getattr(config, "classical_rng", "global_seed"),
+                                         "dlib_alignment_stats": alignment_stats,
                                          "pca_svd_solver_resolved": {k: (v if v else "NOT_RECORDED") for k, v in solver_used.items()
                                                                      if k in trad_names}}},
         "fold": fold_index, "k_folds": K_FOLDS, "seed": seed,

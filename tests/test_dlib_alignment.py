@@ -33,6 +33,7 @@ def _fake_dlib(rects, scores):
         def run(self, rgb, up, thr): return rects, scores, [0] * len(rects)
     m.get_frontal_face_detector = lambda: Det()
     m.shape_predictor = lambda path: (lambda rgb, rect: ("shape", rect))
+    m.rectangle = lambda l, t, r, b: R(l, t, r, b)
     m.get_face_chip = lambda rgb, shape, size, padding: np.full((size, size, 3), 7, np.uint8)
     return m
 
@@ -63,10 +64,16 @@ def test_aligner_returns_150px_bgr_chip_and_records_method(fake):
     assert np.array_equal(a.image, b.image)                  # deterministic
 
 
-def test_no_face_returns_none_never_a_crop(fake):
+def test_no_face_uses_the_counted_centre_box_fallback_never_none(fake):
+    """Policy change (corrective patch): the experiment runner aborts a model when an aligner returns None, so a dlib miss
+    goes through a labelled, counted centre-box fallback instead (see dlib_align module docstring)."""
     fake([], [])
     al = A.DlibChipAligner()
-    assert al.align(np.zeros((100, 100, 3), np.uint8)) is None and al.align_all(np.zeros((9, 9, 3), np.uint8)) == []
+    f = al.align(np.zeros((100, 100, 3), np.uint8))
+    assert f is not None and f.image.shape == (150, 150, 3) and f.alignment_method == A.CENTRE_BOX_METHOD
+    assert (f.bounding_box.x, f.bounding_box.y, f.bounding_box.w) == (25, 25, 50)
+    assert al.stats()["n_centre_box_fallback"] == 1 and al.stats()["centre_box_fallback_fraction"] == 1.0
+    assert len(al.align_all(np.zeros((9, 9, 3), np.uint8))) == 1
 
 
 def test_wrong_chip_size_is_refused():
@@ -78,7 +85,7 @@ def test_without_dlib_falls_back_visibly(monkeypatch):
     monkeypatch.setitem(sys.modules, "dlib", None)           # import raises ImportError
     al = A.DlibChipAligner()
     assert al.method == A.LEGACY_FALLBACK_METHOD and al.describe()["alignment"] == A.LEGACY_FALLBACK_METHOD
-    assert al.describe()["dlib_version"] == "NOT_RECORDED" and al.align(np.zeros((9, 9, 3), np.uint8)) is None
+    assert al.describe()["dlib_version"] == "NOT_RECORDED" and al.align(np.zeros((9, 9, 3), np.uint8)) is None  # no DetectionResult given
 
 
 def test_describe_records_method_detector_weights_and_pins(fake):
@@ -199,7 +206,9 @@ def test_real_dlib_chip_when_available():
     except W.WeightError:
         pytest.skip("verified shape predictor not cached")
     al = A.DlibChipAligner(allow_download=False)
-    assert al.align(np.zeros((120, 120, 3), np.uint8)) is None          # blank image: no face
+    f = al.align(np.zeros((120, 120, 3), np.uint8))                    # blank image: dlib finds no face -> counted centre-box fallback
+    assert f is not None and f.alignment_method == A.CENTRE_BOX_METHOD and f.image.shape == (150, 150, 3)
+    assert al.stats()["n_centre_box_fallback"] == 1
 
 
 # ------------------------------------------------------------------ env_pins

@@ -49,6 +49,11 @@ jobs:
           python -m faceeval.analysis.fold0_results --help
           python -m faceeval.analysis.valid_pairs --help
           python -m faceeval.analysis.efficiency --help
+          python -m faceeval.analysis.multi_split --help
+          python -m faceeval.analysis.figures --help
+          python -m faceeval.analysis.env_pins --help
+          python -m faceeval.analysis.fairness --help
+          python -m faceeval.analysis.evidence_index --help
       - name: Test suite
         run: python -m pytest -q -p no:cacheprovider
 

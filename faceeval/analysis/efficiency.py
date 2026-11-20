@@ -19,11 +19,18 @@ Protocol (per model, on the images you point it at; every phase is reported sepa
 4. preprocessing    ``preprocess_ms_{mean,p50,p95}`` per image (``pipeline_for_model(...).process_path``), after warm-up.
 5. latency          ``embed_ms_{mean,p50,p95}``: per-image embedding at batch size 1, after warm-up.
 6. throughput       ``batched``: for each ``--batch-sizes`` value B, ``images_per_s`` and ``ms_per_image`` of
-                    ``extract_features([B images])`` after warm-up. The harness calls the model's own list interface; a
-                    model that loops internally (ONNX Runtime models, dlib) will show no gain over batch size 1, which is
-                    the honest answer about that implementation, not a harness defect.
+                    ``extract_features([B images])`` after warm-up. The harness calls the model's own list interface, and
+                    that interface may chunk internally (FaceNet re-chunks at its ``batch_size``, 32 by default; the ONNX
+                    Runtime models and dlib process one image at a time). Every row therefore records
+                    ``requested_batch_size`` (images per call), ``model_internal_batch`` (what the model really sends
+                    to the network at once, None = not limited), ``effective_device_batch`` = min of the two and
+                    ``limited_by_model`` / ``label``. Rows with ``limited_by_model`` measure a CALL of B images, not a
+                    network batch of B: read ``effective_device_batch``, never the requested size, as the batch size.
 7. memory           ``rss_peak_mb``: PROCESS peak resident set size over the whole run (``ru_maxrss``; native memory
-                    included). GPU memory only where it is genuinely measurable, see below.
+                    included). ``rss_before_load_mb`` / ``rss_after_load_mb`` are CURRENT resident sizes (Linux
+                    ``/proc/self/statm``; macOS ``proc_pidinfo`` through ctypes; optional psutil) and are NOT_RECORDED when
+                    none of those works; the peak is never substituted for them. ``rss_peak_after_load_mb`` is a peak.
+                    GPU memory only where it is genuinely measurable, see below.
 
 Devices (``--device``)
 ----------------------
@@ -61,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import hashlib
 import json
 import os
@@ -193,18 +201,69 @@ def peak_rss_mb() -> float:
     return float(v) / (1024.0 * 1024.0) if sys.platform == "darwin" else float(v) / 1024.0
 
 
-def current_rss_mb() -> float | str:
-    """Current resident set size in MB, or NOT_RECORDED when the platform offers no cheap way."""
+PROC_PIDTASKINFO = 4          # <sys/proc_info.h>: flavor for struct proc_taskinfo
+
+
+class _ProcTaskInfo(ctypes.Structure):
+    """``struct proc_taskinfo`` from macOS <sys/proc_info.h> (96 bytes; ``pti_resident_size`` is in BYTES)."""
+    _fields_ = [("pti_virtual_size", ctypes.c_uint64), ("pti_resident_size", ctypes.c_uint64),
+                ("pti_total_user", ctypes.c_uint64), ("pti_total_system", ctypes.c_uint64),
+                ("pti_threads_user", ctypes.c_uint64), ("pti_threads_system", ctypes.c_uint64),
+                ("pti_policy", ctypes.c_int32), ("pti_faults", ctypes.c_int32), ("pti_pageins", ctypes.c_int32),
+                ("pti_cow_faults", ctypes.c_int32), ("pti_messages_sent", ctypes.c_int32),
+                ("pti_messages_received", ctypes.c_int32), ("pti_syscalls_mach", ctypes.c_int32),
+                ("pti_syscalls_unix", ctypes.c_int32), ("pti_csw", ctypes.c_int32), ("pti_threadnum", ctypes.c_int32),
+                ("pti_numrunning", ctypes.c_int32), ("pti_priority", ctypes.c_int32)]
+
+
+def _linux_rss_mb(statm_path: str = "/proc/self/statm") -> float | None:
     try:
-        with open("/proc/self/statm") as f:                              # Linux
+        with open(statm_path) as f:
             return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / (1024.0 * 1024.0)
     except (OSError, ValueError, IndexError):
-        pass
+        return None
+
+
+def _macos_rss_mb(libproc: Any = None) -> float | None:
+    """CURRENT resident set size on macOS through ``proc_pidinfo(getpid(), PROC_PIDTASKINFO, ...)`` (libproc, part of the
+    OS; no third-party package). ``pti_resident_size`` is bytes. None on ANY failure (library missing, call returns
+    something other than the full structure, zero size). ``libproc`` can be a stand-in object (tests).
+    Written from Apple's public header; its behaviour on a real Mac has to be confirmed there (the test that touches the
+    real API skips everywhere else)."""
     try:
-        import psutil                                                    # optional dependency
+        if libproc is None:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        fn = libproc.proc_pidinfo
+        fn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+        fn.restype = ctypes.c_int
+        info = _ProcTaskInfo()
+        size = ctypes.sizeof(info)
+        written = fn(os.getpid(), PROC_PIDTASKINFO, 0, ctypes.byref(info), size)
+        if written != size or info.pti_resident_size <= 0:
+            return None
+        return float(info.pti_resident_size) / (1024.0 * 1024.0)
+    except Exception:
+        return None
+
+
+def _psutil_rss_mb() -> float | None:
+    try:
+        import psutil                                                    # optional dependency, never required
         return float(psutil.Process().memory_info().rss) / (1024.0 * 1024.0)
     except Exception:
-        return NOT_RECORDED
+        return None
+
+
+def current_rss_mb(platform_name: str | None = None) -> float | str:
+    """CURRENT resident set size in MB (what the process holds right now), or NOT_RECORDED when it genuinely cannot be
+    measured. This is NOT the peak (see :func:`peak_rss_mb`) and the peak is never substituted for it.
+    Order: Linux ``/proc/self/statm``; on macOS ``proc_pidinfo`` via ctypes; optional ``psutil``; else NOT_RECORDED."""
+    plat = sys.platform if platform_name is None else platform_name
+    for method in ((_linux_rss_mb,) + ((_macos_rss_mb,) if plat == "darwin" else ()) + (_psutil_rss_mb,)):
+        v = method()
+        if v is not None:
+            return v
+    return NOT_RECORDED
 
 
 def summarise_ms(values_s: list[float]) -> dict[str, float]:
@@ -274,6 +333,7 @@ class Setup(NamedTuple):
     load_s: float
     device_used: str
     device_detail: str
+    internal_batch: int | None = None     # images the model sends to the network at once (None = unlimited / not applicable)
 
 
 def _synthetic_setup(n: int) -> Setup:
@@ -281,7 +341,7 @@ def _synthetic_setup(n: int) -> Setup:
     w = rng.normal(size=(64 * 64, 128)).astype(np.float32)
     imgs = [rng.normal(size=(64, 64)).astype(np.float32) for _ in range(n)]
     return Setup(lambda x: x, lambda x: x.reshape(1, -1) @ w,
-                 lambda xs: np.stack([x.reshape(-1) for x in xs]) @ w, imgs, True, 0.0, "cpu (numpy)", "numpy matrix product")
+                 lambda xs: np.stack([x.reshape(-1) for x in xs]) @ w, imgs, True, 0.0, "cpu (numpy)", "numpy matrix product", None)
 
 
 def _real_setup(model_name: str, images: list[Path], allow_stub: bool, device: str = "auto") -> Setup:
@@ -316,11 +376,22 @@ def _real_setup(model_name: str, images: list[Path], allow_stub: bool, device: s
     if model_name in ("arcface", "insightface"):
         detail += f"; model providers={getattr(model, '_providers', NOT_RECORDED)}"
     return Setup(prep, (lambda arr: model.extract_features([arr])), (lambda arrs: model.extract_features(list(arrs))),
-                 list(images), False, load_s, label, detail)
+                 list(images), False, load_s, label, detail, _internal_batch(model_name, model))
+
+
+def _internal_batch(model_name: str, model: Any) -> int | None:
+    """Images per network call that the model's own ``extract_features`` really uses. FaceNet re-chunks at ``_batch_size``;
+    ArcFace/InsightFace (ONNX Runtime) and dlib are driven one image at a time; unknown models: None (unlimited)."""
+    if model_name in TORCH_DEVICE_MODELS:
+        bs = getattr(model, "_batch_size", None)
+        return int(bs) if isinstance(bs, int) and bs >= 1 else None
+    if model_name in ("arcface", "insightface", "dlib_fr"):
+        return 1
+    return None
 
 
 def time_batches(embed_batch: Callable[[Sequence[Any]], Any], arrays: list[Any], batch_size: int, warmup: int,
-                 after: Callable[[], None] | None = None) -> dict[str, Any]:
+                 after: Callable[[], None] | None = None, internal_batch: int | None = None) -> dict[str, Any]:
     """Throughput of ``embed_batch`` over consecutive batches of ``batch_size`` (a final short batch is dropped)."""
     if batch_size < 1:
         raise EfficiencyError("batch size must be >= 1")
@@ -330,7 +401,13 @@ def time_batches(embed_batch: Callable[[Sequence[Any]], Any], arrays: list[Any],
     batches = [arrays[i * batch_size:(i + 1) * batch_size] for i in range(n_batches)]
     t = time_calls(embed_batch, batches, warmup, after)
     ms = summarise_ms(t)
-    return {"batch_size": batch_size, "n_batches": n_batches, "ms_per_batch_mean": ms["mean"], "ms_per_batch_p95": ms["p95"],
+    effective = batch_size if not internal_batch else min(batch_size, int(internal_batch))
+    limited = bool(internal_batch) and batch_size > int(internal_batch)
+    label = (f"{batch_size} images per call; the model sends {effective} at a time to the network (internal limit {internal_batch})"
+             if limited else f"{batch_size} images per call; network batch {effective}")
+    return {"batch_size": batch_size, "requested_batch_size": batch_size, "model_internal_batch": internal_batch,
+            "effective_device_batch": effective, "limited_by_model": limited, "label": label,
+            "n_batches": n_batches, "ms_per_batch_mean": ms["mean"], "ms_per_batch_p95": ms["p95"],
             "ms_per_image_mean": ms["mean"] / batch_size, "images_per_s": 1000.0 * batch_size / ms["mean"]}
 
 
@@ -373,13 +450,13 @@ def run_worker(model_name: str, images_dir: Path | None, n_images: int, warmup: 
     hooks.sync()
     first_embed_ms = (time.perf_counter() - t0) * 1000.0
     t_embed = time_calls(su.embed_one, ok, warmup, after=hooks.sync)
-    batched = [time_batches(su.embed_batch, ok, int(b), warmup, after=hooks.sync) for b in batch_sizes]
+    batched = [time_batches(su.embed_batch, ok, int(b), warmup, after=hooks.sync, internal_batch=su.internal_batch) for b in batch_sizes]
     prep_ms, emb_ms = summarise_ms(t_prep), summarise_ms(t_embed)
     gpu_peak = hooks.peak_mb() if kind == "cuda" else NOT_RECORDED
     gpu_current = hooks.current_mb() if kind == "mps" else NOT_RECORDED
     del first
     return {"model": model_name, "synthetic": su.synthetic, "n_images": len(su.items), "n_preprocess_failed": n_failed_prep,
-            "n_embedded": len(ok), "warmup_calls": warmup, "batch_sizes": [int(b) for b in batch_sizes],
+            "n_embedded": len(ok), "warmup_calls": warmup, "batch_sizes": [int(b) for b in batch_sizes], "model_internal_batch": su.internal_batch,
             "image_list_sha256": image_list_sha,
             "load_s": su.load_s, "first_preprocess_ms": first_prep_ms, "first_embed_ms": first_embed_ms,
             "preprocess_ms_mean": prep_ms["mean"], "preprocess_ms_p50": prep_ms["p50"], "preprocess_ms_p95": prep_ms["p95"],
@@ -392,6 +469,7 @@ def run_worker(model_name: str, images_dir: Path | None, n_images: int, warmup: 
 
 
 COMPARABILITY_FIELDS = ("device_kind", "n_images", "image_list_sha256", "warmup_calls", "batch_sizes")
+# model_internal_batch legitimately differs between models and is reported per row, not as an incomparability
 COMPARABILITY_HW = ("platform", "machine", "python", "torch", "onnxruntime")
 
 
@@ -448,6 +526,8 @@ def run_all(models: list[str], images_dir: Path | None, n_images: int, warmup: i
         for b in r["batched"]:
             row[f"batch{b['batch_size']}_images_per_s"] = b.get("images_per_s", NOT_RECORDED)
             row[f"batch{b['batch_size']}_ms_per_image"] = b.get("ms_per_image_mean", NOT_RECORDED)
+            row[f"batch{b['batch_size']}_effective_device_batch"] = b.get("effective_device_batch", NOT_RECORDED)
+            row[f"batch{b['batch_size']}_limited_by_model"] = b.get("limited_by_model", NOT_RECORDED)
         flat.append(row)
     cols = list(dict.fromkeys(k for row in flat for k in row))
     with open(out_dir / "efficiency_results.csv", "w", newline="") as f:

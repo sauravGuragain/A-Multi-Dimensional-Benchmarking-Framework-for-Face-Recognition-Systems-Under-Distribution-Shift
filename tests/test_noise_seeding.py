@@ -561,6 +561,8 @@ def test_verification_path_ids_belong_to_the_images_they_noise(tmp_path, monkeyp
     """Through the real Fold 0 verification run, for both the plain-array path (Eigenfaces/LBPH) and the uint8-chip
     path (ArcFace): every position k of the batch handed to perturb_batch holds the preprocessing of the record whose
     image_id is image_ids[k] -- checked by re-preprocessing each record on its own."""
+    from faceeval.models.deep import arcface as arcface_module
+    monkeypatch.setattr(arcface_module, "_check_insightface", lambda: False)
     from faceeval.orchestration import verification as V
     from faceeval.orchestration.runner import ExperimentRunner
     from tests.test_verification_stage import _config, _make_fake_lfw

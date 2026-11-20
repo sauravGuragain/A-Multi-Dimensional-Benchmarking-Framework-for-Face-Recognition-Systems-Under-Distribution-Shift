@@ -138,6 +138,9 @@ python -m faceeval.analysis.fairness --run <DEEP_RUN_DIR> --attributes <ATTRIBUT
 # mean / SD over several identity-disjoint split runs (each run made with its own random_seed / verification_fold).
 # Every row says how far its interval may be trusted (interval_status) and whether the model is pretrained or trained per split.
 python -m faceeval.analysis.multi_split --runs <RUN_DIR_1> <RUN_DIR_2> ... --out <NEW_DIR>
+# refuses stub runs, runs with different model sets, and runs that differ in protocol, alignment, dataset scope, classical RNG protocol or weight hashes (only seed/fold may differ);
+# malformed weight provenance (empty object, bad digest, unknown string) is always refused; differing recorded hashes are never allowed
+# add --allow-unverified-weights only if an older run (made before provenance) is known to use the same weights
 
 # figures, drawn only from the files above (calibration_results.csv, multi_split_by_condition.csv, valid_pairs_by_condition.csv, efficiency_results.json)
 python -m faceeval.analysis.figures calibration --input <RUN_ID.calibration dir> --out <NEW_DIR>
@@ -168,7 +171,7 @@ Other splits: add `random_seed: <N>` and/or `verification_fold: <0-9>` to a copy
 
 ### dlib_fr alignment and weights, InsightFace version, PCA/SVM random state
 
-- `dlib_fr` now defaults (config `dlib_alignment: dlib_chip`) to dlib's own pipeline: HOG detector, 5-point landmarks, `get_face_chip(150, padding 0.25)`. `dlib_alignment: legacy` reproduces the old generic aligner and changes the config hash. The method is recorded in the run's preprocessing provenance. No comparability with other models is claimed until a real run exists.
+- `dlib_fr` now defaults (config `dlib_alignment: dlib_chip`) to dlib's own pipeline: HOG detector, 5-point landmarks, `get_face_chip(150, padding 0.25)`. `dlib_alignment: legacy` reproduces the old generic aligner and changes the config hash. The method is recorded in the run's preprocessing provenance. If dlib finds no face, a fixed centred square is used instead and the image is counted (`provenance.classical_rng.dlib_alignment_stats`): such images are NOT failed embeddings, so dlib_fr's failure counts are not comparable with ArcFace's; report the fallback share beside any dlib_fr number. A run with more than 50% fallback, unloadable landmark weights, or (with `require_real_models: true`) no dlib at all is refused. No comparability with other models is claimed until a real run exists.
 - dlib weights come from `github.com/davisking/dlib-models` at a pinned commit over HTTPS and must match pinned SHA-256 values; a file that does not match is refused. Set `FACEEVAL_NO_DOWNLOAD=1` to forbid downloads.
 - The InsightFace version used for the ArcFace run is **not** in the delivered evidence. If `provenance.packages` exists in that run's `verification_results.json`, `env_pins --run <ARCFACE_RUN_DIR> --print` prints it as pins; if not, it refuses.
 - Classical models: `classical_rng: global_seed` (default) is the historical protocol, where PCA's randomized solver and the SVMs draw from the global NumPy stream. `classical_rng: isolated_seed` is a separate, hashed protocol that gives each estimator `random_state=random_seed`; its numbers may differ and must not be merged with historical Fold-0 results.

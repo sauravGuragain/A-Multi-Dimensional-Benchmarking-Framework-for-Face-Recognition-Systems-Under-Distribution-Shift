@@ -12,6 +12,19 @@ Rules
   duplicates. The reference run (seed 42, fold 0) may be included; it is just one more split.
 * Historical results are never mixed with these tables silently: the output records every run's seed, fold and
   manifest/content hashes.
+* Comparability is CHECKED, not assumed. Besides the dataset fingerprint, pair parameters and condition set, every run
+  must agree on: protocol and threshold protocol, dataset scope, per-model preprocessing/alignment record, the classical
+  random-state protocol (``provenance.classical_rng.protocol``, default ``global_seed`` for runs that predate it) and the
+  SHA-256 of each model's weight files (``provenance.weights``). A run with any STUB backbone is refused. Seed and fold
+  are the only things allowed to differ. Every run must contain exactly the same set of models (a model missing from, or
+  extra in, any run is refused and named). Weights recorded as NOT_RECORDED, or not recorded at all, in EVERY run are
+  allowed and listed under ``comparability.weights_unverified``; recorded in some runs but not others is refused unless
+  ``--allow-unverified-weights`` is given; differing recorded hashes are ALWAYS refused. Only the forms written by the
+  runner are accepted for ``provenance.weights.<model>``: the string ``NOT_RECORDED`` or a non-empty object mapping file
+  names to 64-hex SHA-256 digests; an empty object, any other string or any other type is refused as malformed. A
+  duplicated (model, perturbation, severity) row inside one run is refused (it would be counted as an extra split).
+  Comparison fields that no run records at all (older result files) are accepted but listed under
+  ``comparability.fields_not_recorded`` so that nothing is silently assumed.
 * The across-split SD is the sample SD (ddof=1); the "naive" interval is the Student-t interval of the mean over
   splits. Splits of one dataset share images, so they are NOT independent samples; the naive interval is a description
   of split-to-split spread, never a population confidence interval. With n<2 splits SD and CI are NaN (never invented).
@@ -39,6 +52,7 @@ import argparse
 import csv
 import json
 import math
+import re
 from pathlib import Path
 from typing import Sequence
 
@@ -58,6 +72,9 @@ CAVEAT = ("Splits are different identity-disjoint partitions of the same dataset
 PRETRAINED_MODELS = frozenset({"facenet", "arcface", "insightface", "dlib_fr"})
 TRAINED_MODELS = frozenset({"eigenfaces", "fisherfaces", "pca_svm", "lbph", "hog_svm", "knn"})
 MIN_SPLITS_FOR_INTERVAL = 5
+NOT_RECORDED = "NOT_RECORDED"
+RNG_PROTOCOLS = ("global_seed", "isolated_seed")      # core.config: Literal["global_seed", "isolated_seed"]
+_SHA256_HEX = re.compile(r"[0-9a-fA-F]{64}")
 STATUS_SINGLE, STATUS_DESCRIPTIVE, STATUS_FEW = "single_split", "descriptive_only", "too_few_splits"
 STATUS_PRETRAINED_OK = "spread_across_disjoint_test_identities"
 STATUS_CORRECTED = "corrected_interval_only"
@@ -116,6 +133,177 @@ def _train_test_ratio(loaded: list) -> float | str:
     return float(np.mean(ratios)) if ratios else "NOT_RECORDED"
 
 
+PREPROCESSING_KEYS = ("alignment", "normalization_mode", "crop_fraction", "chip_size", "padding", "detector",
+                      "face_selection", "requested_alignment")
+
+
+def _prep_signature(summary: dict) -> dict:
+    out = {}
+    for model, rec in sorted((summary.get("preprocessing") or {}).items()):
+        out[model] = {k: rec.get(k) for k in PREPROCESSING_KEYS if isinstance(rec, dict) and k in rec}
+    return out
+
+
+def _model_set(run: Path, rows: list[dict]) -> set[str]:
+    models = {x.get("model") for x in rows}
+    if None in models or "" in models:
+        raise MultiSplitError(f"{run}: a result row has no 'model' value; the file is not a valid verification_results.csv.")
+    return models
+
+
+def _check_model_sets(runs: Sequence[Path], loaded: list) -> set[str]:
+    """Every run must contain exactly the models of the first run. Returns that model set."""
+    want = _model_set(runs[0], loaded[0][1])
+    for r, (_s, rows) in zip(runs, loaded):
+        got = _model_set(r, rows)
+        if got != want:
+            raise MultiSplitError(
+                f"{r}: model set differs from the first run ({runs[0]}): missing {sorted(want - got)}, extra {sorted(got - want)}. "
+                f"Every split must contain exactly the same models, otherwise some models would be summarised over fewer "
+                f"splits than others. Restore or re-run the missing models, or aggregate only runs that share one model set.")
+    return want
+
+
+def _check_rows(run: Path, rows: list[dict]) -> None:
+    """Row-level sanity of one run's CSV: non-empty, key columns present, numeric severity/metrics, no duplicate condition."""
+    if not rows:
+        raise MultiSplitError(f"{run}: verification_results.csv has no result rows.")
+    seen: dict[tuple, int] = {}
+    for line, x in enumerate(rows, start=2):                      # CSV line 1 is the header
+        for k in KEYS:
+            if x.get(k) in (None, ""):
+                raise MultiSplitError(f"{run}: verification_results.csv line {line} has no {k!r} value.")
+        try:
+            sev = str(float(x["severity"]))
+        except ValueError:
+            raise MultiSplitError(f"{run}: verification_results.csv line {line}: severity {x['severity']!r} is not a number.") from None
+        for met in METRICS:
+            try:
+                float(x[met])
+            except (KeyError, TypeError, ValueError):
+                raise MultiSplitError(f"{run}: verification_results.csv line {line}: column {met!r} is missing or not numeric "
+                                      f"({x.get(met)!r}).") from None
+        cond = (x["model"], x["perturbation"], sev)
+        if cond in seen:
+            raise MultiSplitError(f"{run}: condition {cond} appears more than once (CSV lines {seen[cond]} and {line}). Each "
+                                  f"(model, perturbation, severity) must occur exactly once per run; a duplicated row would be "
+                                  f"counted as an extra split and bias the mean and SD.")
+        seen[cond] = line
+
+
+def _provenance(run: Path, summary: dict) -> dict:
+    """The run's ``provenance`` object ({} for older runs that have none). A present but non-object value is malformed."""
+    if "provenance" not in summary:
+        return {}
+    p = summary["provenance"]
+    if not isinstance(p, dict):
+        raise MultiSplitError(f"{run}: 'provenance' must be an object, found {type(p).__name__}; the result file is malformed.")
+    return p
+
+
+def _rng_protocol(run: Path, summary: dict) -> str:
+    """Classical random-state protocol. Absent (runs that predate it) means the historical ``global_seed``; a present value
+    must be one of the protocols the runner can write."""
+    rng = _provenance(run, summary).get("classical_rng", {})
+    if not isinstance(rng, dict):
+        raise MultiSplitError(f"{run}: provenance.classical_rng must be an object, found {type(rng).__name__}.")
+    protocol = rng.get("protocol", "global_seed")
+    if protocol not in RNG_PROTOCOLS:
+        raise MultiSplitError(f"{run}: provenance.classical_rng.protocol is {protocol!r}; expected one of {list(RNG_PROTOCOLS)}.")
+    return protocol
+
+
+def _weight_signature(run: Path, summary: dict, model: str) -> dict | None:
+    """The recorded weight signature of ``model`` in one run: ``{file name: lower-case SHA-256}``, or None if the run does not
+    record it (older run without ``provenance.weights``, model absent from it, or the explicit string ``NOT_RECORDED``).
+    Anything else is malformed and refused; in particular an empty object is NOT a signature and NOT a legitimate
+    "not recorded". An empty ``weights`` container is fine: the runner writes it for runs without pretrained models."""
+    weights = _provenance(run, summary).get("weights", {})
+    where = f"{run}: provenance.weights"
+    if not isinstance(weights, dict):
+        raise MultiSplitError(f"{where} must be an object, found {type(weights).__name__}; the result file is malformed.")
+    if model not in weights:
+        return None
+    w = weights[model]
+    if isinstance(w, str):
+        if w == NOT_RECORDED:
+            return None
+        raise MultiSplitError(f"{where}.{model} is the string {w!r}; the only accepted string is {NOT_RECORDED!r}.")
+    if not isinstance(w, dict):
+        raise MultiSplitError(f"{where}.{model} is a {type(w).__name__}; expected {NOT_RECORDED!r} or an object of "
+                              f"{{file name: SHA-256}}.")
+    if not w:
+        raise MultiSplitError(f"{where}.{model} is an empty object. It is neither a weight signature nor an explicit "
+                              f"{NOT_RECORDED!r}; the run's provenance is malformed or incomplete. Fix or re-record it.")
+    sig = {}
+    for name, digest in w.items():
+        if not isinstance(name, str) or not name or not isinstance(digest, str) or not _SHA256_HEX.fullmatch(digest):
+            raise MultiSplitError(f"{where}.{model}[{name!r}] = {digest!r} is not a 64-hex-digit SHA-256; the result file is malformed.")
+        sig[name] = digest.lower()
+    return sig
+
+
+def check_comparable(runs: Sequence[Path], loaded: list, allow_unverified_weights: bool = False) -> dict:
+    """Refuse runs that differ in anything other than seed/fold. Returns a record of what was verified."""
+    ref_run, ref = runs[0], loaded[0][0]
+    models = _check_model_sets(runs, loaded)
+
+    def prov(s: dict, *path, default=None):
+        cur: object = s
+        for k in path:
+            if not isinstance(cur, dict) or k not in cur:
+                return default
+            cur = cur[k]
+        return cur
+
+    not_recorded: dict[str, list[str]] = {}
+    for r, (s, _rows) in zip(runs, loaded):
+        if "stub_backbones" not in s:
+            not_recorded.setdefault("stub_backbones", []).append(str(r))
+            continue
+        stubs = s["stub_backbones"]
+        if not isinstance(stubs, (list, tuple)):
+            raise MultiSplitError(f"{r}: stub_backbones must be a list, found {type(stubs).__name__}; the result file is malformed.")
+        if stubs:
+            raise MultiSplitError(f"{r}: run used STUB backbone(s) {sorted(stubs)}; stub results are meaningless and "
+                                  f"cannot be aggregated. Re-run those models with real weights.")
+    checks = {"protocol": lambda r, s: s.get("protocol"), "threshold_protocol": lambda r, s: s.get("threshold_protocol"),
+              "dataset scope": lambda r, s: prov(s, "dataset", "scope"), "full_lfw": lambda r, s: s.get("full_lfw"),
+              "classical RNG protocol": _rng_protocol,
+              "preprocessing/alignment": lambda r, s: _prep_signature(s)}
+    for name, fn in checks.items():
+        want = fn(ref_run, ref)
+        for r, (s, _rows) in zip(runs, loaded):
+            got = fn(r, s)
+            if got != want:
+                raise MultiSplitError(f"{r}: {name} differs from {ref_run}: {got!r} vs {want!r}. Runs that differ in "
+                                      f"{name} are different protocols and must not be aggregated; only seed and fold may differ.")
+        if want is None or want == {}:                       # equal only because NO run records it (older result files)
+            not_recorded.setdefault(name, []).extend(str(r) for r in runs)
+    unverified = set()
+    for m in sorted(models):
+        sigs = [_weight_signature(r, s, m) for r, (s, _rows) in zip(runs, loaded)]
+        recorded = [x for x in sigs if x is not None]
+        if not recorded:
+            if m in PRETRAINED_MODELS:
+                unverified.add(m)
+            continue
+        if any(x != recorded[0] for x in recorded[1:]):
+            files = sorted({f for x in recorded for f in set(x) | set(recorded[0]) if x.get(f) != recorded[0].get(f)})
+            raise MultiSplitError(f"model {m}: weight file hashes differ between runs (files: {files}); different weights are "
+                                  f"different models and are never aggregated, even with --allow-unverified-weights.")
+        if len(recorded) != len(sigs):
+            if not allow_unverified_weights:
+                missing = [str(r) for r, x in zip(runs, sigs) if x is None]
+                raise MultiSplitError(f"model {m}: weight hashes are recorded in some runs but not others (not recorded in: {missing}); "
+                                      f"cannot verify that the same weights were used. If those runs are known to use the same weights "
+                                      f"(e.g. an older reference run made before provenance existed), pass --allow-unverified-weights; "
+                                      f"the model is then listed under comparability.weights_unverified.")
+            unverified.add(m)
+    return {"checked": sorted(checks) + ["identical model set", "stub_backbones empty", "weights sha256 (where recorded)"],
+            "weights_unverified": sorted(unverified), "fields_not_recorded": {k: sorted(set(v)) for k, v in sorted(not_recorded.items())}}
+
+
 def design_report(loaded: list) -> dict:
     """What the set of splits actually is, so that the interval can be read correctly."""
     seeds = sorted({s.get("seed") for s, _ in loaded}, key=str)
@@ -161,7 +349,8 @@ def design_report(loaded: list) -> dict:
                             "No interval here is a population confidence interval."]}
 
 
-def aggregate(runs: Sequence[Path], out_dir: Path, conf: float = 0.95, overwrite: bool = False) -> dict:
+def aggregate(runs: Sequence[Path], out_dir: Path, conf: float = 0.95, overwrite: bool = False,
+              allow_unverified_weights: bool = False) -> dict:
     runs = [Path(r) for r in runs]
     out_dir = Path(out_dir)
     if not runs:
@@ -172,6 +361,8 @@ def aggregate(runs: Sequence[Path], out_dir: Path, conf: float = 0.95, overwrite
     if out_dir.exists() and any(out_dir.iterdir()) and not overwrite:
         raise MultiSplitError(f"{out_dir} exists and is not empty (use --overwrite)")
     loaded = [_load(r) for r in runs]
+    for r, (_s, rows) in zip(runs, loaded):
+        _check_rows(r, rows)
 
     ident = {}
     for r, (s, rows) in zip(runs, loaded):
@@ -180,11 +371,15 @@ def aggregate(runs: Sequence[Path], out_dir: Path, conf: float = 0.95, overwrite
             raise MultiSplitError(f"duplicate split (seed, fold)={key}: {r} and {ident[key]}")
         ident[key] = r
     ref = loaded[0][0]
+    _check_model_sets(runs, loaded)
     ref_cond = {(x["model"], x["perturbation"], str(float(x["severity"]))) for x in loaded[0][1]}
     for r, (s, rows) in zip(runs, loaded):
         cond = {(x["model"], x["perturbation"], str(float(x["severity"]))) for x in rows}
         if cond != ref_cond:
-            raise MultiSplitError(f"{r}: condition set differs from the first run")
+            missing, extra = sorted(ref_cond - cond), sorted(cond - ref_cond)
+            raise MultiSplitError(f"{r}: condition set differs from the first run ({runs[0]}): {len(missing)} missing, {len(extra)} extra "
+                                  f"(e.g. missing {missing[:3]}, extra {extra[:3]}). Every run must contain the same "
+                                  f"(model, perturbation, severity) conditions.")
         if s.get("k_folds") != ref.get("k_folds"):
             raise MultiSplitError(f"{r}: k_folds differs")
         if s["dataset"]["fingerprint_sha256"] != ref["dataset"]["fingerprint_sha256"]:
@@ -194,6 +389,7 @@ def aggregate(runs: Sequence[Path], out_dir: Path, conf: float = 0.95, overwrite
             if (a["cap"], a["rho"]) != (b["cap"], b["rho"]):
                 raise MultiSplitError(f"{r}: pair cap/rho differ in {part}")
 
+    comparability = check_comparable(runs, loaded, allow_unverified_weights)
     n = len(runs)
     grouped: dict[tuple, list[dict]] = {}
     for _s, rows in loaded:
@@ -247,7 +443,7 @@ def aggregate(runs: Sequence[Path], out_dir: Path, conf: float = 0.95, overwrite
         w.writeheader()
         w.writerows(run_rows)
     prov = {"n_splits": n, "confidence": conf, "t_critical": tc, "metrics": list(METRICS), "caveat": CAVEAT,
-            "design": design, "min_splits_for_interval": MIN_SPLITS_FOR_INTERVAL,
+            "design": design, "comparability": comparability, "min_splits_for_interval": MIN_SPLITS_FOR_INTERVAL,
             "interval_status_counts": {k: sum(1 for r in table if r["interval_status"] == k)
                                        for k in sorted({r["interval_status"] for r in table})},
             "runs": run_rows, "n_conditions": len(table)}
@@ -261,9 +457,11 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True, help="NEW output directory")
     ap.add_argument("--confidence", type=float, default=0.95)
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--allow-unverified-weights", action="store_true",
+                    help="accept runs whose weight hashes were not recorded in every run (listed as unverified in the provenance)")
     a = ap.parse_args(argv)
     try:
-        prov = aggregate([Path(r) for r in a.runs], Path(a.out), a.confidence, a.overwrite)
+        prov = aggregate([Path(r) for r in a.runs], Path(a.out), a.confidence, a.overwrite, a.allow_unverified_weights)
     except MultiSplitError as exc:
         print(f"REFUSED: {exc}")
         return 2

@@ -35,7 +35,7 @@ import numpy as np
 
 from faceeval.core.exceptions import PreprocessingError
 from faceeval.core.types import ImageRecord
-from faceeval.preprocessing.aligner import AlignedFace, CentreCropAligner, FaceAligner
+from faceeval.preprocessing.aligner import AlignedFace, CentreCropAligner, FaceAligner, FatalPreprocessingError
 from faceeval.preprocessing.detector import DetectionResult, FaceDetector
 from faceeval.preprocessing.normalizer import NormalizationMode, Normalizer, normalizer_for_model
 
@@ -122,12 +122,14 @@ class PreprocessingPipeline:
         """
         Process one ``ImageRecord`` through the full pipeline.
 
-        Returns a ``ProcessedImage`` with ``success=False`` on error rather
-        than raising, so batch callers can accumulate failures.
+        Returns a ``ProcessedImage`` with ``success=False`` on a per-image error rather than raising, so batch
+        callers can accumulate failures. ``FatalPreprocessingError`` (broken weights/installation) is re-raised.
         """
         t_start = time.perf_counter()
         try:
             result = self._process_inner(record)
+        except FatalPreprocessingError:
+            raise                                   # installation/weights problem: never a per-image failure
         except Exception as exc:
             logger.warning(
                 "Preprocessing failed for '%s': %s", record.image_path, exc

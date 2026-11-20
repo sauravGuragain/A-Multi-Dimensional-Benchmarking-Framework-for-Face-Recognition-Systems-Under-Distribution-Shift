@@ -21,7 +21,7 @@ def test_present_incomplete_and_not_provided(tmp_path):
     assert st["fairness"]["status"] == "PRESENT" and st["fairness"]["files"]["fairness_by_group.csv"]["rows"] == 2
     assert st["efficiency"]["status"] == "INCOMPLETE" and "missing efficiency_results.csv" in st["efficiency"]["problems"]
     assert st["calibration"]["status"] == "INCOMPLETE" and st["valid_pairs"]["status"] == "NOT_PROVIDED"
-    assert idx["summary"] == {"PRESENT": 1, "INCOMPLETE": 2, "NOT_PROVIDED": 3}
+    assert idx["summary"] == {"PRESENT": 1, "INCOMPLETE": 2, "INVALID": 0, "NOT_PROVIDED": 3}
     assert (tmp_path / "out" / "evidence_index.md").read_text().startswith("# Evidence index")
 
 

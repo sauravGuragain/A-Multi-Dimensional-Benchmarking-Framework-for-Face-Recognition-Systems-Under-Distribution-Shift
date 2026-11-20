@@ -100,19 +100,27 @@ def _cond(r: dict) -> str:
 
 # ------------------------------------------------------------------------------------------------- figures
 def fig_calibration(rows: list[dict], **_: Any) -> tuple[Any, list[dict]]:
+    """ECE per condition as MARKERS (before: open circle, after Platt: filled square). Conditions are categorical and not
+    ordered, so nothing is drawn between them; the x axis carries the condition names."""
     fig, ax = plt.subplots(figsize=FIG_SIZE)
+    conds = list(dict.fromkeys(_cond(r) for r in rows))
+    pos = {c: i for i, c in enumerate(conds)}
+    models = _models(rows)
     data = []
-    for i, m in enumerate(_models(rows)):
+    for i, m in enumerate(models):
         rs = [r for r in rows if r["model"] == m]
-        x = list(range(len(rs)))
+        c = PALETTE[i % len(PALETTE)]
+        dx = (i - (len(models) - 1) / 2.0) * 0.12
+        x = [pos[_cond(r)] + dx for r in rs]
         b = [_num(r["ece_before"], "ece_before") for r in rs]
         a = [_num(r["ece_after"], "ece_after") for r in rs]
-        c = PALETTE[i % len(PALETTE)]
-        ax.plot(x, b, "--", color=c, marker="o", ms=3, label=f"{m}: before (p=(cos+1)/2)")
-        ax.plot(x, a, "-", color=c, marker="s", ms=3, label=f"{m}: after Platt")
+        ax.plot(x, b, linestyle="None", marker="o", mfc="none", color=c, ms=6, label=f"{m}: before (p=(cos+1)/2)")
+        ax.plot(x, a, linestyle="None", marker="s", color=c, ms=5, label=f"{m}: after Platt")
         data += [{"model": m, "condition": _cond(r), "ece_before": bb, "ece_after": aa, "n_pairs": r["n_pairs"]}
                  for r, bb, aa in zip(rs, b, a)]
-    ax.set_xlabel("condition (file order)")
+    ax.set_xticks(range(len(conds)))
+    ax.set_xticklabels(conds, rotation=45, ha="right", fontsize=6)
+    ax.set_xlabel("condition (categorical; no ordering implied)")
     ax.set_ylabel("expected calibration error (15 bins)")
     ax.set_title("Calibration before/after Platt scaling (fit on clean validation pairs; balanced pairs, 50% genuine)", fontsize=9)
     ax.legend(fontsize=7)
@@ -154,13 +162,17 @@ def fig_valid_pairs(rows: list[dict], **_: Any):
         rate = [_num(r["valid_pair_rate_balanced"], "valid_pair_rate_balanced") for r in rs]
         e2e = [_num(r["e2e_auc"], "e2e_auc") for r in rs]
         val = [_num(r["valid_auc"], "valid_auc") for r in rs]
-        a1.plot(range(len(rs)), rate, "-o", ms=3, color=c, label=m)
+        a1.plot(range(len(rs)), rate, linestyle="None", marker="o", ms=4, color=c, label=m)
         a2.scatter(e2e, val, s=14, color=c, label=m)
         data += [{"model": m, "condition": _cond(r), "valid_pair_rate_balanced": a, "e2e_auc": b, "valid_auc": v}
                  for r, a, b, v in zip(rs, rate, e2e, val)]
-    lim = [min(d["e2e_auc"] for d in data if not math.isnan(d["e2e_auc"])), 1.0]
+    finite = [d["e2e_auc"] for d in data if not math.isnan(d["e2e_auc"])]
+    if not finite or all(math.isnan(d["valid_auc"]) for d in data):
+        plt.close(fig)
+        raise FigureError("no finite AUC values in e2e_auc/valid_auc (every condition had too few valid pairs per class); nothing to plot")
+    lim = [min(finite), 1.0]
     a2.plot(lim, lim, ":", color="grey")
-    a1.set_xlabel("condition (file order)"); a1.set_ylabel("share of balanced pairs with both embeddings valid"); a1.set_ylim(0, 1.02)
+    a1.set_xlabel("condition (file order; categorical, not connected)"); a1.set_ylabel("share of balanced pairs with both embeddings valid"); a1.set_ylim(0, 1.02)
     a2.set_xlabel("end-to-end AUC (failures scored as zero vectors)"); a2.set_ylabel("valid-pairs-only AUC (conditional)")
     a1.set_title("Valid-pair rate per condition", fontsize=9)
     a2.set_title("Valid-pairs-only vs end-to-end AUC\n(conditional on surviving pairs; not comparable across models)", fontsize=8)

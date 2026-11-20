@@ -293,3 +293,106 @@ def test_run_all_writes_comparability_batches_and_device_columns(tmp_path, capsy
     header = (out / "efficiency_results.csv").read_text().splitlines()[0].split(",")
     assert {"device_kind", "batch4_images_per_s", "batch8_ms_per_image", "first_embed_ms", "rss_peak_after_load_mb"} <= set(header)
     assert E.main(["--models", E.SYNTHETIC, "--device", "mps", "--out", str(tmp_path / "o2")]) == 2
+
+
+# ---------------------------------------------------------------- current RSS (Linux / macOS / psutil / NOT_RECORDED)
+import ctypes  # noqa: E402
+import sys as _sys  # noqa: E402
+import types as _types  # noqa: E402
+
+
+class _FakeLibproc:
+    """Stand-in for libproc: writes pti_resident_size into the struct the harness passes by reference."""
+    def __init__(self, resident_bytes=0, returns=None, raises=None):
+        self.calls, self._res, self._ret, self._raises = [], resident_bytes, returns, raises
+
+        def proc_pidinfo(pid, flavor, arg, buf, size):
+            self.calls.append((pid, flavor, arg, size))
+            if self._raises:
+                raise self._raises
+            buf._obj.pti_resident_size = self._res
+            return size if self._ret is None else self._ret
+        self.proc_pidinfo = proc_pidinfo
+
+
+def test_proc_taskinfo_layout_matches_the_apple_header():
+    assert ctypes.sizeof(E._ProcTaskInfo) == 96                       # 6 x uint64 + 12 x int32
+    assert E._ProcTaskInfo.pti_resident_size.offset == 8 and E._ProcTaskInfo.pti_virtual_size.offset == 0
+    assert E._ProcTaskInfo.pti_policy.offset == 48 and E._ProcTaskInfo.pti_priority.offset == 92
+    assert E.PROC_PIDTASKINFO == 4
+
+
+def test_macos_current_rss_converts_bytes_to_mb_and_asks_for_the_right_flavor():
+    lib = _FakeLibproc(resident_bytes=300 * 1024 * 1024)
+    assert E._macos_rss_mb(lib) == 300.0
+    pid, flavor, arg, size = lib.calls[0]
+    assert pid == __import__("os").getpid() and flavor == 4 and arg == 0 and size == 96
+    assert E._macos_rss_mb(_FakeLibproc(resident_bytes=1536 * 1024)) == 1.5
+
+
+@pytest.mark.parametrize("lib", [_FakeLibproc(300 << 20, returns=-1), _FakeLibproc(300 << 20, returns=40),
+                                 _FakeLibproc(0), _FakeLibproc(raises=OSError("no libproc")), object()])
+def test_macos_native_failure_returns_none(lib):
+    assert E._macos_rss_mb(lib) is None
+
+
+def _no_linux(monkeypatch):
+    monkeypatch.setattr(E, "_linux_rss_mb", lambda *a, **k: None)
+
+
+def test_macos_api_failure_falls_back_to_optional_psutil(monkeypatch):
+    _no_linux(monkeypatch)
+    monkeypatch.setattr(E, "_macos_rss_mb", lambda *a, **k: None)
+    ps = _types.SimpleNamespace(Process=lambda: _types.SimpleNamespace(memory_info=lambda: _types.SimpleNamespace(rss=200 * 1024 * 1024)))
+    monkeypatch.setitem(_sys.modules, "psutil", ps)
+    assert E.current_rss_mb("darwin") == 200.0
+
+
+def test_macos_native_is_used_before_psutil_and_only_on_darwin(monkeypatch):
+    _no_linux(monkeypatch)
+    monkeypatch.setattr(E, "_macos_rss_mb", lambda *a, **k: 123.0)
+    monkeypatch.setattr(E, "_psutil_rss_mb", lambda: 999.0)
+    assert E.current_rss_mb("darwin") == 123.0
+    assert E.current_rss_mb("linux") == 999.0                         # the macOS call is not attempted elsewhere
+    monkeypatch.setattr(E, "_psutil_rss_mb", lambda: None)
+    assert E.current_rss_mb("win32") == E.NOT_RECORDED
+
+
+def test_linux_statm_behaviour(tmp_path, monkeypatch):
+    f = tmp_path / "statm"
+    f.write_text("5000 2560 100 10 0 400 0\n")
+    monkeypatch.setattr(E.os, "sysconf", lambda name: 4096)
+    assert E._linux_rss_mb(str(f)) == 2560 * 4096 / (1024.0 * 1024.0) == 10.0
+    f.write_text("garbage")
+    assert E._linux_rss_mb(str(f)) is None and E._linux_rss_mb(str(tmp_path / "missing")) is None
+    f.write_text("1")
+    assert E._linux_rss_mb(str(f)) is None
+    f.write_text("5000 2560\n")                                       # current_rss_mb tries Linux first, on every platform
+    orig = E._linux_rss_mb
+    monkeypatch.setattr(E, "_linux_rss_mb", lambda *a, **k: orig(str(f)))
+    monkeypatch.setattr(E, "_macos_rss_mb", lambda *a, **k: 1.0)
+    assert E.current_rss_mb("darwin") == 10.0 and E.current_rss_mb("linux") == 10.0
+
+
+def test_not_recorded_only_when_every_method_fails_and_peak_is_never_substituted(monkeypatch):
+    _no_linux(monkeypatch)
+    monkeypatch.setattr(E, "_macos_rss_mb", lambda *a, **k: None)
+    monkeypatch.setattr(E, "_psutil_rss_mb", lambda: None)
+    monkeypatch.setattr(E, "peak_rss_mb", lambda: 4242.0)
+    assert E.current_rss_mb("darwin") == E.NOT_RECORDED != 4242.0
+    r = E.run_worker(E.SYNTHETIC, None, n_images=6, warmup=0, allow_stub=False)
+    assert r["rss_before_load_mb"] == r["rss_after_load_mb"] == E.NOT_RECORDED      # honest gap, run still succeeds
+    assert r["rss_peak_mb"] == 4242.0 and r["rss_peak_after_load_mb"] == 4242.0     # peak fields stay peak fields
+
+
+def test_peak_and_current_are_distinct_quantities_on_this_machine():
+    cur = E.current_rss_mb()
+    if cur == E.NOT_RECORDED:
+        pytest.skip("no current-RSS method available on this platform")
+    assert 0 < cur <= E.peak_rss_mb() + 1.0                      # a current size never exceeds the process peak
+
+
+@pytest.mark.skipif(_sys.platform != "darwin", reason="exercises the real libproc; only meaningful on macOS (not run in the Linux cloud sandbox)")
+def test_real_macos_libproc_returns_a_plausible_current_rss():
+    v = E._macos_rss_mb()
+    assert v is not None and 1.0 < v <= E.peak_rss_mb() + 1.0
