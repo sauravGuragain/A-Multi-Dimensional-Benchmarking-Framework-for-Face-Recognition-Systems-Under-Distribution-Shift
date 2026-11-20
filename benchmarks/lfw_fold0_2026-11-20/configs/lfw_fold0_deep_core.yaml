@@ -1,0 +1,79 @@
+experiment_name: lfw_fold0_deep_core
+
+description: >
+  LFW Fold 0 pair-verification benchmark for FaceNet and ArcFace
+  using real pretrained backbones. Thresholds are calibrated on
+  clean validation pairs and frozen before test evaluation.
+
+random_seed: 42
+evaluation_protocol: lfw_fold0_verification
+require_real_models: true
+allow_partial_results: false
+deterministic_mode: true
+
+dataset_names:
+  - lfw
+data_root: data/
+
+split_strategy: stratified
+test_fraction: 0.30
+val_fraction: 0.10
+
+traditional_models: []
+
+deep_models:
+  - facenet
+  - arcface
+
+perturbation_schedule:
+  perturbation_types:
+    - gaussian_blur
+    - motion_blur
+    - gaussian_noise
+    - salt_pepper_noise
+    - speckle_noise
+    - brightness
+    - contrast
+    - gamma
+    - rotation
+    - scaling
+    - cropping
+    - random_occlusion
+    - face_mask
+    - sunglasses
+    - jpeg_compression
+    - resolution_degradation
+  severity_levels:
+    - 0.0
+    - 0.2
+    - 0.4
+    - 0.6
+    - 0.8
+    - 1.0
+  compose_perturbations: false
+
+compute_calibration: false
+compute_fairness: false
+compute_fingerprints: false
+compute_failure_analysis: false
+compute_deployment_scores: false
+
+profile_resources: false
+profile_batch_size: 32
+
+use_feature_cache: false
+feature_cache_dir: experiments/cache/lfw_fold0_deep_core/
+
+output_dir: experiments/lfw_fold0_deep_core/
+report_dir: reports/lfw_fold0_deep_core/
+
+export_svg: false
+export_png: false
+export_csv: false
+export_json: false
+generate_pdf_report: false
+
+mlflow_tracking_uri: sqlite:///experiments/mlflow.db
+mlflow_experiment_name: lfw_fold0_deep_core
+
+device: cpu
