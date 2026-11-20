@@ -1,0 +1,11 @@
+FaceEval-X LFW Fold 0 Benchmark Archive
+Archived: Fri 20 Nov 2026 21:19:06 +0545
+Current Git HEAD: f6d5e12f08e0bf484f44dd68f4a04bafe423403c
+Current Git branch: feat/lfw-fold0-deep-core-on-main
+
+Canonical result code version: 34608f4eb8f1e073c254d53cbae9e64c82150710
+Python environment:
+Python 3.12.14
+NumPy: 1.26.4
+
+Git status:
