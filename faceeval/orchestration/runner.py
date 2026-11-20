@@ -392,10 +392,15 @@ class ExperimentRunner:
             f"First: {head}. Set allow_partial_results: true to accept partial results."
         )
 
+    def _create_model(self, name: str):
+        """Create models with explicit Mac CPU execution for ArcFace."""
+        kwargs = {"providers": ["CPUExecutionProvider"]} if name == "arcface" else {}
+        return model_registry.get(name, **kwargs)
+
     def _get_model(self, name: str):
         """Registry instance; hands out the preflight-loaded model once instead of reloading it."""
         kept = self._preflight_kept.pop(name, None)
-        return kept if kept is not None else model_registry.get(name)
+        return kept if kept is not None else self._create_model(name)
 
     def _preflight_models(self, model_names: list, trad_names: set) -> None:
         """Load every deep model once, before any expensive work, and require a real backbone."""
@@ -407,7 +412,7 @@ class ExperimentRunner:
             self._preflight_kept.clear()
             gc.collect()
             try:
-                model = model_registry.get(name)
+                model = self._create_model(name)
                 if hasattr(model, "assert_real_backbone"):
                     model.assert_real_backbone()
             except Exception as exc:
