@@ -56,6 +56,7 @@ class TraditionalRecognizerMixin(BaseRecognizer):
         super().__init__(**hyperparameters)
         self._extractor: Any = None
         self._clf: Any = None
+        self._random_state: int | None = None      # None = scikit-learn's historical behaviour (the global NumPy stream)
 
     # ------------------------------------------------------------------
     # Abstract hooks for subclasses
@@ -196,3 +197,21 @@ class TraditionalRecognizerMixin(BaseRecognizer):
     def _softmax(x: np.ndarray) -> np.ndarray:
         e = np.exp(x - x.max())
         return e / e.sum()
+
+
+CLASSICAL_RNG_GLOBAL = "global_seed"       # historical protocol: scikit-learn draws from the process-global NumPy stream
+CLASSICAL_RNG_ISOLATED = "isolated_seed"   # separately versioned protocol: every stochastic estimator gets random_state=seed
+
+
+def apply_classical_rng(model: Any, config: Any) -> bool:
+    """Apply ``config.classical_rng`` to a model. Historical default (``global_seed``): do nothing, return False.
+
+    ``isolated_seed``: set ``random_state = config.random_seed`` on the model's stochastic scikit-learn estimators (PCA's
+    randomized solver, LinearSVC, SVC), so a fit no longer depends on how much of the global stream earlier code consumed.
+    This CAN change the numbers relative to the historical protocol, which is why the option is part of the config hash."""
+    if getattr(config, "classical_rng", CLASSICAL_RNG_GLOBAL) != CLASSICAL_RNG_ISOLATED:
+        return False
+    if getattr(model, "PARADIGM", None) != ModelParadigm.TRADITIONAL:      # deep models have no scikit-learn estimators
+        return False
+    model._random_state = int(config.random_seed)
+    return True

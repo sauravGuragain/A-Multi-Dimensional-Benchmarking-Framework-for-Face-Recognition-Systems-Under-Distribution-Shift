@@ -16,12 +16,14 @@ It is the software foundation of the thesis project, *Multi-dimensional benchmar
 | Custom Fold-0 verification, **deep models**: FaceNet and ArcFace over the same 16 x 6 grid (96 conditions each) | **Completed** (FaceNet run `b567f880...`, ArcFace run `4bdf6982...`; both 96/96, as reported by the maintainer from the Mac; full IDs in `docs/EXPERIMENT_EVIDENCE_RECORD.md`). Their result files and evidence archives are on the maintainer's machine and are **not in Git**. Values are archived **end-to-end** results: an image with no embedding becomes a zero vector and its pairs are still scored (see "Six-model Fold-0 analysis" below). The earlier two-row clean-only deep checks (`b8fbb5c3`, `c069be84`) were a preliminary step and are not the benchmark. |
 | Six-model Fold-0 analysis (Eigenfaces, Fisherfaces, LBPH, HOG-SVM, FaceNet, ArcFace; 6 x 16 x 6 = 576 primary rows) | **Code and tests are merged** (`44c305c`, `faceeval/analysis/fold0_results.py`, `tests/test_fold0_analysis.py`). **Reported by the maintainer from the Mac:** the analysis ran successfully and produced 13 CSV tables and 7 figures (`table10` has 2,880 rows = 576 conditions x 5 metrics). **The generated outputs are local artifacts and are not committed to Git.** Not independently verified by the reviewer. |
 | Earlier identification runs `fe4696ee...` and `69878560...` | **Superseded.** Defective FaceNet preprocessing / non-real ArcFace. Kept only as audit history. |
-| PCA+SVM, k-NN, InsightFace, dlib models | Implemented, **never run on LFW** |
-| Calibration, fairness, speed, memory, sample efficiency | Code present, **not evaluated**. Scores are placeholders (0.5). |
+| PCA+SVM, k-NN, InsightFace, dlib models | Implemented and run through the same verification runner on fake data only (`tests/test_ten_models.py`: 20/20 rows, placeholder backbones labelled `STUB`). **Never run on real LFW; real InsightFace weights never loaded.** `dlib_fr` now uses dlib's own face chip and pinned, checksum-verified weights (checked on sample images in the cloud sandbox only). Configs: `configs/lfw_fold0_pca_svm.yaml`, `lfw_fold0_knn.yaml`, `lfw_fold0_deep_insightface.yaml`, `lfw_fold0_deep_dlib_fr.yaml`. |
+| Calibration | **Integrated into the Fold-0 verification runner** (`compute_calibration: true`): Platt scaling fitted on clean validation pairs only, ECE/MCE/Brier/NLL before and after per condition, written to a sibling `<run_id>.calibration/` directory (the run directory and its manifest are unchanged). Tested on fake data (`tests/test_verification_calibration.py`); **no real-model calibration result exists yet**. Fairness: offline tool `faceeval.analysis.fairness` needs an external attribute CSV; LFW here has none, so **no fairness result exists** (synthetic tests only). Speed/memory: `faceeval.analysis.efficiency` (init, preprocessing, latency, batched throughput, process peak RSS; CPU/CUDA/MPS selection; GPU peak when CUDA); **no real measurement yet**. Figures: `faceeval.analysis.figures` (drawn only from result files). Sample efficiency: not implemented. The deployment-score placeholders are unchanged. |
+| ArcFace/FaceNet valid-pairs-only analysis (`python -m faceeval.analysis.valid_pairs`) | **Implemented and tested on synthetic fixtures only.** Not yet run on the real FaceNet/ArcFace `scores/*.npz` files (those are on the maintainer's machine). See "Valid-pairs-only analysis" below. |
+| Deep-model latency and peak-memory harness (`python -m faceeval.analysis.efficiency`) | **Implemented; self-tested with a synthetic pseudo-model only.** No FaceNet/ArcFace timing or memory number has been measured. |
 | Deployment ranking | **Accuracy-only in practice.** Robustness, calibration, fairness, latency, memory and cost are placeholders. It is a demonstration of the scoring mechanism, not a validated multi-dimensional ranking. |
 | Behavioral fingerprint | 3 of 21 dimensions populated (robustness AUC for blur, rotation, brightness). |
 | Full benchmark (`configs/lfw_full_benchmark.yaml`: 10 models, 16 perturbations, 6 severities, all subjects) | **Never run.** Out of the thesis scope. |
-| JSON report, figure export, Docker | Not produced / not built (a JSON exporter exists in `reporting/` but the runner does not call it; the thesis run exported 0 figures) |
+| JSON report | The runner now writes `reports/.../report.json` atomically with `schema_version` 2 (`tests/test_json_export.py`). Figure export (`export_png`) and Docker: not exercised / not built. The archived thesis run exported 0 figures. |
 
 ### Evidence levels used in this repository
 
@@ -32,7 +34,7 @@ It is the software foundation of the thesis project, *Multi-dimensional benchmar
 | **Verified on the maintainer's Mac (reported)** | The maintainer reports it from their own machine: the 983-test full suite (commit not recorded), the 2bad8efd run, the `results` view of that run, the two completed deep Fold-0 sweeps (FaceNet, ArcFace; 96/96 conditions each) and the six-model Fold-0 analysis run (576 rows, 13 tables, 7 figures). None of these result files is in Git. |
 | **Verified in a Linux cloud sandbox (not the Mac)** | Focused tests and the runner's read-only behaviour: whole-tree before/after snapshots on fixture data for six commands and two database states (`docs/EXPERIMENT_EVIDENCE_RECORD.md` section 5). These do not establish success on macOS. |
 | **Reported as run on the maintainer's macOS (Bash 3.2)** | The maintainer reports that `bash -n run_faceeval.sh`, `help`, `check` (0 warnings), `results 2bad8efd` and `evidence 2bad8efd` succeeded. The SHA-256 of the file that was tested is NOT RECORDED. The SHA-256 of the committed `run_faceeval.sh` is given in the evidence record, section 5. Experiment-starting commands and a clean-machine installation have not been verified. |
-| **Planned / proposed only** | A repeat of the thesis run, the 10-model benchmark, calibration/fairness/speed/memory studies, multiple Fold-0 splits or seeds, a valid-pairs-only analysis of ArcFace from the saved score files, a clean-machine install. **None has been executed.** |
+| **Planned / proposed only** | A repeat of the thesis run; the real-weights 10-model benchmark; running the valid-pairs-only, calibration, multi-split and efficiency tools on the real deep models and archives (all NEEDS MAC); a clean-machine deep install (torch, facenet-pytorch, insightface, dlib); a fairness study (needs licensed attribute labels). **None has been executed.** |
 
 **Reduced scope of the identification validation (run `2bad8efd`):** 200 of 5,749 subjects (3.5%), 4 of 10 models, 3 of 16 perturbations, 3 of 6 severity levels. One run, one split, seed 42, no confidence intervals.
 
@@ -49,7 +51,9 @@ git clone <this repository> && cd <repository folder>
 python3.12 -m venv .venv && source .venv/bin/activate   # recommended: Python 3.12 (3.11 is also fine; see the note below)
 # If Python 3.11 is the version you have installed, use it instead:
 #   python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e ".[deep]"          # core + FaceNet/ArcFace packages
+pip install -e ".[deep]"          # core + torch + FaceNet/ArcFace/InsightFace packages
+# pip install -e "."               # lightweight core only (classical models, analysis tools, reports; no torch)
+# pip install -e ".[dlib]"         # optional dlib_fr model (needs CMake and a C++ compiler)
 # put LFW at data/lfw/<Person_Name>/<Person_Name>_0001.jpg  (see docs/USER_GUIDE.md)
 chmod +x run_faceeval.sh
 ./run_faceeval.sh check           # read-only environment / data / weights check
@@ -162,11 +166,29 @@ python -m faceeval.analysis.fold0_results \
 - **The generated analysis output is a local artifact and is not committed to Git.** `reports/` is git-ignored, so an output folder created under it stays local unless it is force-added. The FaceNet and ArcFace result files are likewise not in Git. Anyone reproducing the analysis needs those two run directories (the maintainer holds them, with verified archives, on the Mac) and can state their SHA-256 values from the evidence record.
 - The historical per-image-noise run (`c408e0d2`) is read separately and appears only in `table11`; it is never mixed into the primary rows.
 
-**ArcFace and FaceNet failure semantics (read before interpreting any deep-model number).** The archived deep-model metrics are **end-to-end**. An image whose embedding cannot be produced is replaced by a **zero vector**, and every pair containing it is **still scored**; failed pairs are **not removed**. For ArcFace this happens mainly when the internal InsightFace face detector finds no face (the cropping fallback is switched off). AUC, EER, TAR, FAR and accuracy of such a condition therefore mix recognition quality with face-acquisition failure and are **not** valid-pairs-only recognition performance. The verification CSVs carry `n_test_images`, `n_failed_embeddings`, `n_failed_pairs_balanced` and `n_failed_pairs_full`; the analysis reports them in `table12` (per condition) and `table13` (per model) and in `fig7` with explicit denominators. Counts summed across conditions are not unique failed images. Classical models have no failure counters, and their diagnostic fields are left blank rather than invented. A valid-pairs-only analysis from the saved `scores/*.npz` files has **not** been performed.
+**ArcFace and FaceNet failure semantics (read before interpreting any deep-model number).** The archived deep-model metrics are **end-to-end**. An image whose embedding cannot be produced is replaced by a **zero vector**, and every pair containing it is **still scored**; failed pairs are **not removed**. For ArcFace this happens mainly when the internal InsightFace face detector finds no face (the cropping fallback is switched off). AUC, EER, TAR, FAR and accuracy of such a condition therefore mix recognition quality with face-acquisition failure and are **not** valid-pairs-only recognition performance. The verification CSVs carry `n_test_images`, `n_failed_embeddings`, `n_failed_pairs_balanced` and `n_failed_pairs_full`; the analysis reports them in `table12` (per condition) and `table13` (per model) and in `fig7` with explicit denominators. Counts summed across conditions are not unique failed images. Classical models have no failure counters, and their diagnostic fields are left blank rather than invented. The separate valid-pairs-only tool (next section) can compute the valid-pairs-only values from the saved score files; it has **not yet been run on the real ArcFace or FaceNet scores**.
 
 **FaceNet versus ArcFace is a pipeline comparison, not a backbone-only comparison.** FaceNet (InceptionResNetV1, VGGFace2 weights) uses a centre crop (fraction 0.8) resized to 160 x 160 and no face detector, so it has no detection failures by construction. ArcFace (InsightFace `buffalo_l`, recognition model `w600k_r50`) uses a face detector with 5-point landmark alignment to 112 x 112. Differences between the two therefore combine backbone, alignment, input size and detection. (Established by reading the source at `44c305c`; not re-run.)
 
 Other caveats for the Fold-0 results: custom split, not the official LFW View 2 protocol, so no comparison with published numbers; the threshold is chosen once on clean validation pairs and frozen, so accuracy, TAR and FAR under perturbation use a threshold that was not re-tuned, while AUC and EER are threshold-free; brightness, contrast and gamma are centred (see above); one split, one seed.
+
+## Valid-pairs-only analysis and efficiency harness
+
+**Valid-pairs-only** (one deep run at a time; reads only that run's `verification_results.csv/.json` and `scores/*.npz`, writes only into a new folder):
+
+```bash
+python -m faceeval.analysis.valid_pairs --run <ARCFACE_VERIFICATION_RUN_DIR> --out <NEW_OUTPUT_DIRECTORY>
+```
+
+It first reproduces every archived end-to-end value (accuracy, TAR, FAR, AUC, EER) and failure count from the saved scores and refuses the run if any differ (`--allow-archive-mismatch` records instead of refusing; for inspection only). It then reports, next to the unchanged archived values, `valid_*` metrics on the pairs where both images have a valid embedding (same frozen validation threshold, no re-tuning) and `common_*` metrics on one fixed pair set that is valid in every condition. Output: `valid_pairs_by_condition.csv`, `valid_pairs_model_summary.csv`, `valid_pairs_provenance.json`. The valid-pairs-only numbers are conditional and selection-biased (failed images are not a random sample), are not comparable across models, and carry no confidence interval. They do not replace the end-to-end results.
+
+**Efficiency harness** (deep models; each model in its own subprocess; measures this machine only):
+
+```bash
+python -m faceeval.analysis.efficiency --models facenet arcface --images-dir data/lfw --n-images 200 --out <NEW_OUTPUT_DIRECTORY>
+```
+
+Per model: load time, per-image preprocessing and embedding latency (mean, p50, p95), images per second and process peak RSS, with hardware and software versions (`NOT_RECORDED` when unknown). A stub backbone is refused. Treat the numbers as one run on one machine.
 
 ## Tests
 

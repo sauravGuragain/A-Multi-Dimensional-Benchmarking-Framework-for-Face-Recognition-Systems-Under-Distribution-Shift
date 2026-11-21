@@ -117,6 +117,65 @@ Result: `tables/` (13 CSV files), `figures/` (7 PNG files with the deep runs; 6 
 
 How to read the deep-model rows: they are **end-to-end** results. When no embedding can be produced for an image (mainly ArcFace's face detector finding no face), it becomes a zero vector and its pairs are **still scored**, not removed. So ArcFace AUC and EER include detection failures; see `table12`, `table13` and figure 7 for the failure counts and rates. FaceNet and ArcFace also differ in crop or alignment, input size and detection, so the comparison is between pipelines, not between backbones. Brightness, contrast and gamma are centred at severity 0.5, so their curves are V-shaped. Never mix these Fold-0 results with the identification results of section 5.
 
+## 5c. Additional analysis tools (read-only on run directories; every one writes to a NEW directory)
+
+All commands below only READ archived run directories. Use the Python from your environment (section 2). **None of them has been run on the real FaceNet/ArcFace archives yet** (see `docs/EXPERIMENT_EVIDENCE_RECORD.md`, Addendum 4).
+
+```bash
+# valid-pairs-only re-analysis of ONE deep run (refuses if the archived numbers cannot be reproduced from scores/*.npz)
+python -m faceeval.analysis.valid_pairs --run <DEEP_RUN_DIR> --out <NEW_DIR>
+
+# runtime and peak memory, one subprocess per model (needs the real weights and a folder of face images).
+# Reports separately: initialisation, cold first call, preprocessing, per-image latency (batch 1), batched throughput, peak RSS.
+# --device: auto (what the experiments use: CUDA if present else CPU) | cpu | cuda | mps (Apple Silicon) | best. An unavailable
+# explicit device is REFUSED, never replaced. Only FaceNet (torch) can move; ArcFace/InsightFace (ONNX Runtime) and dlib are cpu/auto.
+python -m faceeval.analysis.efficiency --models facenet arcface --images-dir <IMAGES_DIR> --n-images 200 --warmup 5 --batch-sizes 8 32 --device auto --out <NEW_DIR>
+# run it again with --device mps for FaceNet on Apple Silicon; the JSON's "comparability" block lists what differs between rows
+
+# subgroup metrics, ONLY with an external CSV (image_id,group); nothing is inferred; LFW here has no such labels
+python -m faceeval.analysis.fairness --run <DEEP_RUN_DIR> --attributes <ATTRIBUTES_CSV> --source "<where the labels come from and their licence>" --out <NEW_DIR>
+
+# mean / SD over several identity-disjoint split runs (each run made with its own random_seed / verification_fold).
+# Every row says how far its interval may be trusted (interval_status) and whether the model is pretrained or trained per split.
+python -m faceeval.analysis.multi_split --runs <RUN_DIR_1> <RUN_DIR_2> ... --out <NEW_DIR>
+# refuses stub runs, runs with different model sets, and runs that differ in protocol, alignment, dataset scope, classical RNG protocol or weight hashes (only seed/fold may differ);
+# malformed weight provenance (empty object, bad digest, unknown string) is always refused; differing recorded hashes are never allowed
+# add --allow-unverified-weights only if an older run (made before provenance) is known to use the same weights
+
+# figures, drawn only from the files above (calibration_results.csv, multi_split_by_condition.csv, valid_pairs_by_condition.csv, efficiency_results.json)
+python -m faceeval.analysis.figures calibration --input <RUN_ID.calibration dir> --out <NEW_DIR>
+python -m faceeval.analysis.figures multi_split --input <MULTI_SPLIT_DIR> --metric auc --perturbation clean --severity 0 --out <NEW_DIR>
+python -m faceeval.analysis.figures valid_pairs --input <VALID_PAIRS_DIR> --out <NEW_DIR>
+python -m faceeval.analysis.figures efficiency  --input <EFFICIENCY_DIR> --out <NEW_DIR>
+
+# which package versions a COMPLETED run recorded (to reproduce the environment; prints pins, refuses to guess if none were recorded)
+python -m faceeval.analysis.env_pins --run <DEEP_RUN_DIR> --print          # or --check for installed-vs-recorded
+
+# index of which evidence products exist (claims nothing about missing ones)
+python -m faceeval.analysis.evidence_index --fold0-analysis <DIR> --valid-pairs <DIR> --out <NEW_DIR>
+```
+
+Calibration is a runner option, not a separate tool: set `compute_calibration: true` in a Fold-0 verification config. It fits Platt scaling on the clean validation pairs only and writes `<run_id>.calibration/` next to the run directory (the run directory itself is unchanged, so the integrity checker still passes).
+
+Other splits: add `random_seed: <N>` and/or `verification_fold: <0-9>` to a copy of a Fold-0 config and use a different `output_dir`. Seed 42 with fold 0 is the reference split and behaves exactly as before; any other combination is an additional identity-disjoint split (leakage and pair-count invariants are checked) and must never be mixed with the reference results in one table without saying so.
+
+### Reading the multi-split intervals (what is and is not claimed)
+
+- **Folds of one seed**: the test sets hold different people (disjoint), but every fold's training set contains the other folds' test people. For a pretrained model (FaceNet, ArcFace, InsightFace, dlib) nothing is trained on a split, so the spread across folds is a fair picture of test-set sampling. For a model trained per split (eigenfaces, fisherfaces, pca_svm, lbph, hog_svm, knn) the plain t-interval is **too narrow**; use the `*_corrected_ci_*` columns (Nadeau-Bengio corrected resampled t, variance x (1/n + n_test/n_train)), an approximation that assumes the correlation between splits is about n_test/(n_test+n_train).
+- **Different seeds**: independent shuffles of the same people. Test sets overlap, so results are positively correlated; the table is labelled `descriptive_only` and no interval in it is a valid confidence interval.
+- Fewer than 5 splits is labelled `too_few_splits`. No interval is a population confidence interval: one dataset, one collection process.
+
+### Configuration identity versus documentation-only changes
+
+`config_hash` (and so `run_id` and the result store's duplicate-run detection) is computed from the parsed configuration values. The YAML `description:` **is** a value, so editing it creates a new identity. `#` comments are **not** values: edit them freely. Fields added later with a default value (`verification_fold: 0`, `dlib_alignment: dlib_chip`, `classical_rng: global_seed`) are left out of the hashed form while they hold the default, so every older config keeps its hash (`tests/test_config_hash_stability.py` pins the eight pre-existing hashes). The `description:` of `configs/lfw_fold0_classical.yaml` still says calibration is not read by the runner; that sentence is historical and stays, because changing it would change the hash. The corrected statement is in the `#` comments of that file and in `docs/EXPERIMENT_EVIDENCE_RECORD.md` (Addendum 5).
+
+### dlib_fr alignment and weights, InsightFace version, PCA/SVM random state
+
+- `dlib_fr` now defaults (config `dlib_alignment: dlib_chip`) to dlib's own pipeline: HOG detector, 5-point landmarks, `get_face_chip(150, padding 0.25)`. `dlib_alignment: legacy` reproduces the old generic aligner and changes the config hash. The method is recorded in the run's preprocessing provenance. If dlib finds no face, a fixed centred square is used instead and the image is counted (`provenance.classical_rng.dlib_alignment_stats`): such images are NOT failed embeddings, so dlib_fr's failure counts are not comparable with ArcFace's; report the fallback share beside any dlib_fr number. A run with more than 50% fallback, unloadable landmark weights, or (with `require_real_models: true`) no dlib at all is refused. No comparability with other models is claimed until a real run exists.
+- dlib weights come from `github.com/davisking/dlib-models` at a pinned commit over HTTPS and must match pinned SHA-256 values; a file that does not match is refused. Set `FACEEVAL_NO_DOWNLOAD=1` to forbid downloads.
+- The InsightFace version used for the ArcFace run is **not** in the delivered evidence. If `provenance.packages` exists in that run's `verification_results.json`, `env_pins --run <ARCFACE_RUN_DIR> --print` prints it as pins; if not, it refuses.
+- Classical models: `classical_rng: global_seed` (default) is the historical protocol, where PCA's randomized solver and the SVMs draw from the global NumPy stream. `classical_rng: isolated_seed` is a separate, hashed protocol that gives each estimator `random_state=random_seed`; its numbers may differ and must not be merged with historical Fold-0 results.
+
 ## 6. What the project contains (one minute)
 
 | Folder | Purpose |

@@ -94,7 +94,7 @@ class EigenfacesRecognizer(TraditionalRecognizerMixin):
 
     def _build_extractor(self) -> Any:
         from sklearn.decomposition import PCA
-        return PCA(n_components=self._n_components, whiten=self._whiten)
+        return PCA(n_components=self._n_components, whiten=self._whiten, random_state=getattr(self, "_random_state", None))
 
     def _build_classifier(self) -> Any:
         if self._classifier_type == "knn":
@@ -102,7 +102,7 @@ class EigenfacesRecognizer(TraditionalRecognizerMixin):
             return KNeighborsClassifier(n_neighbors=self._knn_k, metric="euclidean")
         from sklearn.svm import LinearSVC
         from sklearn.calibration import CalibratedClassifierCV
-        base = LinearSVC(C=self._svm_C, max_iter=2000)
+        base = LinearSVC(C=self._svm_C, max_iter=2000, random_state=getattr(self, "_random_state", None))
         return CalibratedClassifierCV(base, cv=3)
 
     def extract_features(self, X):  # type: ignore[override]
@@ -174,7 +174,7 @@ class FisherfacesRecognizer(TraditionalRecognizerMixin):
             X_flat.shape[0] - 1,
             X_flat.shape[1],
         )
-        self._extractor = PCA(n_components=n_pca, whiten=True)
+        self._extractor = PCA(n_components=n_pca, whiten=True, random_state=getattr(self, "_random_state", None))
         X_pca = self._extractor.fit_transform(X_flat)
 
         # LDA step
@@ -188,7 +188,7 @@ class FisherfacesRecognizer(TraditionalRecognizerMixin):
         self.EMBEDDING_DIM = X_lda.shape[1]
 
         # Classifier
-        base = LinearSVC(C=self._svm_C, max_iter=2000)
+        base = LinearSVC(C=self._svm_C, max_iter=2000, random_state=getattr(self, "_random_state", None))
         self._clf = CalibratedClassifierCV(base, cv=min(3, n_classes))
         self._clf.fit(X_lda, y_train)
         self._is_trained = True
@@ -203,7 +203,7 @@ class FisherfacesRecognizer(TraditionalRecognizerMixin):
         n_classes = len(self._class_labels)
         X_flat = self._flatten_batch(X_train)
         n_pca = min(self._n_pca or X_flat.shape[0] - 1, X_flat.shape[0] - 1, X_flat.shape[1])
-        self._extractor = PCA(n_components=n_pca, whiten=True)
+        self._extractor = PCA(n_components=n_pca, whiten=True, random_state=getattr(self, "_random_state", None))
         X_pca = self._extractor.fit_transform(X_flat)
         n_lda = min(self._n_lda or n_classes - 1, n_classes - 1, X_pca.shape[1])
         self._lda = LinearDiscriminantAnalysis(n_components=n_lda)
@@ -298,7 +298,7 @@ class PCASVMRecognizer(TraditionalRecognizerMixin):
 
     def _build_extractor(self) -> Any:
         from sklearn.decomposition import PCA
-        return PCA(n_components=self._n_components, whiten=self._whiten)
+        return PCA(n_components=self._n_components, whiten=self._whiten, random_state=getattr(self, "_random_state", None))
 
     def _build_classifier(self) -> Any:
         from sklearn.svm import SVC
@@ -308,6 +308,7 @@ class PCASVMRecognizer(TraditionalRecognizerMixin):
             gamma=self._svm_gamma,
             probability=True,
             max_iter=5000,
+            random_state=getattr(self, "_random_state", None),
         )
 
     def extract_features(self, X):  # type: ignore[override]

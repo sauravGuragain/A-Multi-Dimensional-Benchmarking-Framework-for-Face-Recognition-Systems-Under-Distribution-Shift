@@ -34,6 +34,7 @@ from faceeval.core.exceptions import EmbeddingError, OrchestratorError
 from faceeval.evaluation import pairs as pairs_mod
 from faceeval.evaluation import split_manifest as sm
 from faceeval.evaluation.metrics import compute_verification_metrics
+from faceeval.evaluation.verification_calibration import CAL_SUFFIX, CalibrationRecorder
 from faceeval.orchestration.perturbed_inputs import needs_chips, perturb_batch
 from faceeval.core.registry import perturbation_registry
 from faceeval.perturbation import base as _base
@@ -41,7 +42,8 @@ from faceeval.perturbation import noise as _noise
 
 logger = logging.getLogger(__name__)
 
-FOLD_INDEX = 0
+FOLD_INDEX = 0                   # the REFERENCE fold; other folds via config.verification_fold
+REFERENCE_SEED = 42              # seed of the reference Fold 0 (the committed Fold-0 results)
 K_FOLDS = 10
 FULL_LFW_IDENTITIES = 5749
 FULL_LFW_IMAGES = 13233
@@ -120,7 +122,32 @@ def _code_version() -> str:
 
 # Packages whose versions decide what a deep-model run computes. Recorded in the summary (best effort).
 PROVENANCE_PACKAGES = ("torch", "torchvision", "facenet-pytorch", "insightface", "onnxruntime", "onnx",
-                       "opencv-python", "scikit-image", "scikit-learn", "scipy", "Pillow")
+                       "opencv-python", "scikit-image", "scikit-learn", "scipy", "Pillow", "dlib")
+
+
+MAX_FAILED_EMBEDDING_FRACTION = 0.5     # a deep model whose CLEAN validation embeddings fail above this share is refused
+WARN_ALIGNMENT_FALLBACK_FRACTION = 0.10
+
+
+def _check_failed_fraction(model_name: str, valid: np.ndarray, where: str) -> None:
+    """Refuse a model whose clean embeddings mostly failed: its metrics would describe the failure, not the model."""
+    n = int(valid.size)
+    if n and (1.0 - float(valid.sum()) / n) > MAX_FAILED_EMBEDDING_FRACTION:
+        raise EmbeddingError(f"{model_name}: {n - int(valid.sum())} of {n} {where} embeddings failed "
+                             f"(> {MAX_FAILED_EMBEDDING_FRACTION:.0%}); refusing to report results for a model that mostly failed. "
+                             f"Check the model files, the detector and the preprocessing.")
+
+
+def _check_alignment_fallback(model_name: str, stats: dict, sink: dict) -> None:
+    """Record an aligner's counters in the run provenance; refuse when most images needed the fallback."""
+    sink[model_name] = dict(stats)
+    frac = float(stats.get("centre_box_fallback_fraction", 0.0))
+    if frac > float(stats.get("max_allowed_fraction", 1.0)):
+        raise EmbeddingError(f"{model_name}: {frac:.0%} of the images found no face and used the centre-box fallback "
+                             f"(allowed: {stats['max_allowed_fraction']:.0%}); refusing. Counters: {stats}")
+    if frac > WARN_ALIGNMENT_FALLBACK_FRACTION:
+        logger.warning("[%s] %.1f%% of the images used the alignment fallback; see provenance.classical_rng.dlib_alignment_stats.",
+                       model_name, 100 * frac)
 
 
 def _file_sha256(path: Path) -> str:
@@ -135,7 +162,8 @@ def _weight_files(model_name: str) -> list[Path]:
     """Cached pretrained-weight files the named deep model would load by default (empty if unknown or absent).
 
     FaceNet (facenet-pytorch, ``vggface2``): ``<TORCH_HOME or $XDG_CACHE_HOME/torch or ~/.cache/torch>/checkpoints``.
-    ArcFace (InsightFace pack ``buffalo_l``): ``~/.insightface/models/buffalo_l/*.onnx``. Only the default
+    ArcFace (InsightFace pack ``buffalo_l``): ``~/.insightface/models/buffalo_l/*.onnx``. InsightFace (pack
+    ``antelopev2``): ``~/.insightface/models/antelopev2/**.onnx``. dlib_fr: ``~/.cache/dlib/dlib_face_recognition_resnet_model_v1.dat``. Only the default
     locations are looked at; a model loaded from a custom location is reported as not recorded."""
     home = Path(os.path.expanduser("~"))
     if model_name == "facenet":
@@ -143,6 +171,12 @@ def _weight_files(model_name: str) -> list[Path]:
         return sorted(Path(os.path.expanduser(torch_home), "checkpoints").glob("*vggface2*"))
     if model_name == "arcface":
         return sorted((home / ".insightface" / "models" / "buffalo_l").glob("*.onnx"))
+    if model_name == "insightface":                       # antelopev2 pack; may be unzipped one level deeper
+        base = home / ".insightface" / "models" / "antelopev2"
+        return sorted(set(base.glob("*.onnx")) | set(base.glob("*/*.onnx")))
+    if model_name == "dlib_fr":
+        d = home / ".cache" / "dlib"                     # recognition network + the 5-point landmark model of the chip aligner
+        return sorted(set(d.glob("dlib_face_recognition_resnet_model_v1.dat")) | set(d.glob("shape_predictor_5_face_landmarks.dat")))
     return []
 
 
@@ -172,7 +206,7 @@ def run_provenance(model_names) -> dict[str, Any]:
             out["packages"][pkg] = importlib_metadata.version(pkg)
         except Exception:
             out["packages"][pkg] = nr
-    for name in sorted({m for m in model_names if m in ("facenet", "arcface")}):
+    for name in sorted({m for m in model_names if m in ("facenet", "arcface", "insightface", "dlib_fr")}):
         try:
             files = _weight_files(name)
             out["weights"][name] = ({f.name: _file_sha256(f) for f in files} if files else nr)
@@ -596,7 +630,7 @@ def _run_fold0_verification(
     from faceeval.core.types import SplitStrategy
     from faceeval.data.splitter import DatasetSplitter
     from faceeval.core.registry import model_registry
-    from faceeval.preprocessing.pipeline import describe_preprocessing, pipeline_for_model
+    from faceeval.preprocessing.pipeline import alignment_for_config, describe_preprocessing, pipeline_for_model
 
     progress = progress or (lambda stage, done, total: None)
     seed = config.random_seed
@@ -606,8 +640,16 @@ def _run_fold0_verification(
     n_identities = len({r.subject_id for r in records})
 
     # ---- 1. Fold 0 split -------------------------------------------------
+    fold_index = int(getattr(config, "verification_fold", FOLD_INDEX))
+    if not 0 <= fold_index < K_FOLDS:
+        raise OrchestratorError(f"verification_fold must be in [0, {K_FOLDS - 1}], got {fold_index}")
+    # The reference split (seed 42, fold 0) keeps EVERY historical behaviour byte for byte, including the official
+    # Revision 4.1 G/K acceptance counts on a verified full LFW. Any other (seed, fold) is a further identity-disjoint
+    # split of the same protocol: same pair-generation parameters (cap, rho), pair seed = split seed, and the
+    # acceptance counts are those of the split itself (leakage and pair-count invariants are checked instead).
+    reference_split = (seed == REFERENCE_SEED and fold_index == FOLD_INDEX)
     splits = DatasetSplitter(seed=seed).all_k_folds(records, k=K_FOLDS, dataset_name=dataset_name)
-    fold = splits[FOLD_INDEX]
+    fold = splits[fold_index]
     by_id = {r.image_id: r for r in records}
     parts_ids = {"train": fold.train_ids, "validation": fold.val_ids, "test": fold.test_ids}
     parts_recs = {p: [by_id[i] for i in ids] for p, ids in parts_ids.items()}
@@ -618,18 +660,19 @@ def _run_fold0_verification(
     if counts_match and not full_lfw:
         logger.warning("Dataset has the official LFW counts but its fingerprint %s is not a verified "
                        "official copy: treated as a custom dataset.", ds_fingerprint)
+    official_counts = full_lfw and reference_split
     expected_ids = expected_imgs = None
-    if not full_lfw:
+    if not official_counts:
         logger.info("Dataset has %d identities / %d images (not a verified official full LFW; "
                     "min_images_per_subject=%s, max_subjects=%s): Fold 0 is built on this dataset and "
-                    "the Revision 4.1 G/K acceptance counts are not applied.",
-                    n_identities, len(records), config.min_images_per_subject, config.max_subjects)
+                    "the Revision 4.1 G/K acceptance counts are not applied (reference_split=%s).",
+                    n_identities, len(records), config.min_images_per_subject, config.max_subjects, reference_split)
         expected_ids = {p: len({i for i, _ in rows}) for p, rows in partitions.items()}
         expected_imgs = {p: len(rows) for p, rows in partitions.items()}
 
     # ---- 2. Manifest ----------------------------------------------------------
     metadata = {
-        "dataset_name": dataset_name, "fold": str(FOLD_INDEX), "seed": str(seed),
+        "dataset_name": dataset_name, "fold": str(fold_index), "seed": str(seed),
         "python_version": platform.python_version(), "numpy_version": np.__version__,
         "code_version": _code_version(),
         "shuffled_order_sha256": shuffled_order_sha256(records, seed),
@@ -647,8 +690,12 @@ def _run_fold0_verification(
     for part in ("validation", "test"):
         code = PARTITION_CODE[part]
         rows = list(manifest.partitions[part])
-        ps = (pairs_mod.build_fold0_pairs(rows, code) if full_lfw
-              else pairs_mod.build_pairs(rows, partition_code=code, **pairs_mod.FOLD0_DEFAULTS))
+        if official_counts:
+            ps = pairs_mod.build_fold0_pairs(rows, code)
+        elif reference_split:
+            ps = pairs_mod.build_pairs(rows, partition_code=code, **pairs_mod.FOLD0_DEFAULTS)
+        else:                                   # another split: same cap / rho, pair seed = split seed
+            ps = pairs_mod.build_pairs(rows, partition_code=code, **{**pairs_mod.FOLD0_DEFAULTS, "seed": seed})
         pair_sets[part] = ps
         pair_shas[part] = pairs_mod.write_manifest(ps, str(out_dir / f"pairs_{part}_fold0.tsv"))
         logger.info("Pairs[%s]: G=%d K=%d balanced=%d sha256=%s", part,
@@ -663,6 +710,13 @@ def _run_fold0_verification(
             "full": (gen + pool, np.r_[np.ones(len(gen), bool), np.zeros(len(pool), bool)]),
         }
 
+    split_counts = None
+    if not reference_split:
+        from faceeval.evaluation.split_invariants import SplitInvariantError, check_split_and_pairs
+        try:
+            split_counts = check_split_and_pairs(partitions, pair_sets, rho=pairs_mod.FOLD0_DEFAULTS["rho"])
+        except SplitInvariantError as exc:
+            raise OrchestratorError(f"split invariants violated (seed={seed}, fold={fold_index}): {exc}") from exc
     pa = {p: pair_arrays(ps) for p, ps in pair_sets.items()}
     # PairSet.images is the sorted (identity, image_id) table; index -> record
     img_recs = {p: [by_id[im] for _, im in ps.images] for p, ps in pair_sets.items()}
@@ -670,6 +724,11 @@ def _run_fold0_verification(
     # ---- 4. Per-model evaluation -----------------------------------------------------
     rows_out: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
+    solver_used: dict[str, Any] = {}
+    alignment_stats: dict[str, Any] = {}
+    # Calibration (config.compute_calibration): fitted on CLEAN VALIDATION pairs only, additive artifacts in a sibling
+    # directory, never able to fail a run. verification_results.csv and the run directory are not changed by it.
+    cal_rec = CalibrationRecorder() if getattr(config, "compute_calibration", False) else None
     preprocessing: dict[str, dict[str, Any]] = {}   # exact preprocessing per model, written to the JSON
     total = len(model_names) * len(specs)
     done = 0
@@ -690,7 +749,12 @@ def _run_fold0_verification(
         paradigm = "traditional" if model_name in trad_names else "deep_learning"
         try:
             model = (get_model or model_registry.get)(model_name)
-            pipeline = pipeline_for_model(model_name, skip_detection_for_pre_cropped=True)
+            from faceeval.models.traditional.base import apply_classical_rng
+            apply_classical_rng(model, config)
+            pipeline = pipeline_for_model(model_name, skip_detection_for_pre_cropped=True,
+                                          alignment=alignment_for_config(model_name, config))
+            if hasattr(pipeline.aligner, "ensure_ready"):          # dlib_chip: verify the landmark weights BEFORE any work
+                pipeline.aligner.ensure_ready(strict=bool(config.require_real_models))
             prep = preprocessing[model_name] = describe_preprocessing(pipeline)
             is_deep = paradigm == "deep_learning"
             if is_deep:
@@ -709,7 +773,10 @@ def _run_fold0_verification(
             else:
                 X_test = preprocess(pipeline, img_recs["test"], raw_images)
 
+            if hasattr(pipeline.aligner, "stats"):
+                _check_alignment_fallback(model_name, pipeline.aligner.stats(), alignment_stats)
             model.fit_embedding(X_train, y_train) if not is_deep else model.fit_embedding([], y_train)
+            solver_used[model_name] = getattr(getattr(model, "_extractor", None), "_fit_svd_solver", None)
             backbone = "n/a"
             if is_deep:
                 backbone = "STUB" if model.is_stub_backbone() else "real"
@@ -740,15 +807,19 @@ def _run_fold0_verification(
             if val_miss == val_miss and val_miss > 0.05:
                 logger.warning("[%s] detector missed %.1f%% of clean validation images "
                                "(scored as zero embeddings / non-matches).", model_name, 100 * val_miss)
+            if is_deep:
+                _check_failed_fraction(model_name, val_valid, "clean validation")
             thr = best_accuracy_threshold(v_scores, v_lab)
             emb_dim = int(embed(X_val[:1]).shape[1])
             val_acc = _accuracy_at(v_scores, v_lab, thr)["accuracy"]
+            if cal_rec is not None:
+                cal_rec.fit(model_name, v_scores, v_lab, thr)
             logger.info("[%s] validation threshold=%.5f (balanced acc=%.4f)", model_name, thr, val_acc)
         except EmbeddingError as exc:
             _fail({"protocol": "verification", "model": model_name, "stage": "setup",
                              "error": f"EmbeddingError: {exc}"})
             if config.require_real_models:
-                fatal = OrchestratorError(f"Model '{model_name}' has no real backbone and "
+                fatal = OrchestratorError(f"Model '{model_name}' cannot be used (no real backbone, or its clean inputs failed) and "
                                           f"require_real_models=true: {exc}")
                 break
             done += len(specs); progress("verification", done, total); continue
@@ -811,6 +882,8 @@ def _run_fold0_verification(
                                   valid=valid, s_bal=s_bal, s_full=s_full, threshold=np.float64(thr))
                 stream.write("row", row)       # recorded first: a row in rows_out is always in the stream
                 rows_out.append(row)
+                if cal_rec is not None and cal_rec.has(model_name):
+                    cal_rec.record(model_name, spec.perturbation_type.value, spec.severity, spec.label, s_bal, t_lab)
             except Exception as exc:
                 logger.warning("Verification condition %s/%s failed: %s", model_name, spec.label, exc)
                 if score_file is not None and not stream.has_row(score_file):   # no file without its row
@@ -827,6 +900,15 @@ def _run_fold0_verification(
                 raise
             done += 1
             progress("verification", done, total)
+
+    # ---- 4b. Calibration artifacts (sibling directory; a failure here never changes the verification results) ----
+    cal_info: dict[str, Any] | None = None
+    if cal_rec is not None:
+        try:
+            cal_info = cal_rec.write(out_dir.with_name(out_dir.name + CAL_SUFFIX))
+        except Exception as exc:
+            logger.exception("Calibration artifacts could not be written")
+            cal_info = {"status": "FAILED", "error": f"{type(exc).__name__}: {exc}"}
 
     # ---- 5. Write results ------------------------------------------------------
     fields: list[str] = []
@@ -855,8 +937,12 @@ def _run_fold0_verification(
             "pairs": {p: pair_content_sha256(ps) for p, ps in pair_sets.items()},
         },
         "environment": {k: metadata[k] for k in ("python_version", "numpy_version", "code_version")},
-        "provenance": run_provenance(model_names),
-        "fold": FOLD_INDEX, "k_folds": K_FOLDS, "seed": seed,
+        "provenance": {**run_provenance(model_names),
+                       "classical_rng": {"protocol": getattr(config, "classical_rng", "global_seed"),
+                                         "dlib_alignment_stats": alignment_stats,
+                                         "pca_svd_solver_resolved": {k: (v if v else "NOT_RECORDED") for k, v in solver_used.items()
+                                                                     if k in trad_names}}},
+        "fold": fold_index, "k_folds": K_FOLDS, "seed": seed,
         "manifest_path": str(manifest_path), "manifest_sha256": manifest_sha,
         "shuffled_order": shuffled_cmp,
         "pair_manifest_sha256": pair_shas,
@@ -868,6 +954,13 @@ def _run_fold0_verification(
         "stub_backbones": sorted({r["model"] for r in rows_out if r["backbone"] == "STUB"}),
         "results": rows_out,
     }
+    if not reference_split:                     # only non-reference splits carry this block: reference runs are unchanged
+        summary["split"] = {"reference_split": False, "seed": seed, "fold": fold_index, "k_folds": K_FOLDS,
+                            "pair_params": {"seed": seed, "cap": pairs_mod.FOLD0_DEFAULTS["cap"],
+                                            "rho": pairs_mod.FOLD0_DEFAULTS["rho"]},
+                            "invariants_checked": True, "counts": split_counts}
+    if cal_info is not None:
+        summary["calibration"] = cal_info
     # Finalization order. A run is COMPLETE only when BOTH the JSON summary says COMPLETE AND the stream ends
     # with a successfully fsynced "end" record saying COMPLETE. So the summary is first written as INCOMPLETE,
     # then the end record is written, and only then is the summary promoted to its final status. Whichever step

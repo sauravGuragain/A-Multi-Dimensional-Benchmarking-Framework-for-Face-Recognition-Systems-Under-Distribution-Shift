@@ -175,7 +175,7 @@ class LBPHRecognizer(TraditionalRecognizerMixin):
         X_feat = np.array([self._compute_lbp_histogram(x) for x in X_train])
         self.EMBEDDING_DIM = X_feat.shape[1]
 
-        base = LinearSVC(C=self._svm_C, max_iter=3000)
+        base = LinearSVC(C=self._svm_C, max_iter=3000, random_state=getattr(self, "_random_state", None))
         self._clf = CalibratedClassifierCV(base, cv=min(3, len(self._class_labels)))
         self._clf.fit(X_feat, y_train)
         self._is_trained = True

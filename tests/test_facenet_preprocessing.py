@@ -203,6 +203,8 @@ def _verification_outputs(tmp_path, monkeypatch, data_root, deep):
 
 
 def test_outputs_record_exact_normalisation_and_crop_fraction(tmp_path, monkeypatch, fake_data):
+    from faceeval.models.deep import arcface as arcface_module
+    monkeypatch.setattr(arcface_module, "_check_insightface", lambda: False)
     rows, header, data = _verification_outputs(tmp_path, monkeypatch, fake_data, ("facenet", "arcface"))
     assert {"normalization_mode", "alignment", "crop_fraction"} <= set(header)
     fn = [r for r in rows if r["model"] == "facenet"]

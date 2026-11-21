@@ -71,6 +71,12 @@ _TEMPLATES: dict[int, np.ndarray] = {
 # Result type
 # ---------------------------------------------------------------------------
 
+class FatalPreprocessingError(RuntimeError):
+    """A preprocessing problem that is NOT a property of one image (missing or corrupt model files, an unavailable
+    required library). ``PreprocessingPipeline.process`` re-raises it instead of recording a per-image failure, so a
+    run cannot finish with every image 'failed' because of a broken installation."""
+
+
 class AlignedFace:
     """
     One aligned face chip with provenance metadata.

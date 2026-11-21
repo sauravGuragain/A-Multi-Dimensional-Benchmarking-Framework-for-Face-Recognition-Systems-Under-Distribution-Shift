@@ -72,7 +72,8 @@ perturbation_schedule:
 # ── Evaluation flags ───────────────────────────────────────────────────────
 # Under evaluation_protocol: lfw_fold0_verification none of these run:
 #   compute_fingerprints / compute_deployment_scores consume identification results (none here);
-#   compute_calibration / compute_fairness / compute_failure_analysis are not read by the runner.
+#   compute_calibration IS read under this protocol (Platt on clean validation pairs; sibling dir <run_id>.calibration/);
+#   compute_fairness / compute_failure_analysis are not read by the runner (see faceeval.analysis.fairness for the offline tool).
 compute_calibration: false
 compute_fairness: false
 compute_fingerprints: false

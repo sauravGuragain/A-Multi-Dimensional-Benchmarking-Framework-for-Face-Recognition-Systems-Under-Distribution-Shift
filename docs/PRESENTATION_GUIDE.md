@@ -133,3 +133,10 @@ You may mention that `demo` and `full` exist and that they start experiments, bu
 15. **Is ArcFace's Fold-0 AUC its true recognition performance?** No. It includes detection failures. A valid-pairs-only analysis from the saved scores has not been done.
 16. **Can I put the identification and Fold-0 numbers together?** No. Different protocols (image-level closed-set identification versus identity-disjoint verification); they are kept apart.
 17. **What is your contribution?** A modular, config-driven framework with robustness fingerprints and context-weighted scoring, a worked validation showing that clean accuracy hides failure modes, and an audit trail that caught and replaced invalid results.
+
+## Evidence status to state honestly (updated 2026-11-19)
+
+- Completed and reported: custom Fold-0 verification for six models (576 rows). Not official LFW View 2; do not compare with published LFW numbers.
+- Implemented and tested on fake or synthetic data only: calibration in the runner, multi-split runs and aggregation, valid-pairs-only analysis, efficiency harness, fairness interface, JSON export. Say "implemented, not yet run on the real models" for each.
+- Not available: any fairness result on LFW (no demographic labels), any real runtime/memory number, real insightface/dlib results.
+- Deep-model numbers are end-to-end (failed embeddings are zero vectors). Say so whenever ArcFace is shown.

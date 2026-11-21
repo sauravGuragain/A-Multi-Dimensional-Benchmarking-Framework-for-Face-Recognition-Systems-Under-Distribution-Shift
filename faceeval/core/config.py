@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -95,6 +95,15 @@ class _ExperimentConfigSchema(BaseModel):
     test_fraction: float = Field(default=0.3, ge=0.0, lt=1.0)
     val_fraction: float = Field(default=0.1, ge=0.0, lt=1.0)
     k_folds: int | None = Field(default=None, ge=2)
+    # Fold-0 verification: which of the 10 identity-disjoint folds is the test fold (0 = the reference Fold 0).
+    verification_fold: int = Field(default=0, ge=0, le=9)
+    # dlib_fr only: 'dlib_chip' = dlib's own 5-point face chip (what the network was trained on); 'legacy' = the generic
+    # ArcFace-template aligner at 150 px. No other model reads it.
+    dlib_alignment: Literal["dlib_chip", "legacy"] = "dlib_chip"
+    # Classical models only. 'global_seed' (default) = the historical protocol: scikit-learn's randomized PCA / SVM draw from
+    # the process-global NumPy stream seeded once per run. 'isolated_seed' = a separately versioned protocol: every such
+    # estimator gets random_state=random_seed, independent of the global stream. Results may differ between the two.
+    classical_rng: Literal["global_seed", "isolated_seed"] = "global_seed"
     evaluation_protocol: str = "identification"
     require_real_models: bool = False
     allow_partial_results: bool = False
@@ -324,6 +333,9 @@ class ConfigLoader:
             test_fraction=schema.test_fraction,
             val_fraction=schema.val_fraction,
             k_folds=schema.k_folds,
+            verification_fold=schema.verification_fold,
+            dlib_alignment=schema.dlib_alignment,
+            classical_rng=schema.classical_rng,
             evaluation_protocol=schema.evaluation_protocol,
             require_real_models=schema.require_real_models,
             allow_partial_results=schema.allow_partial_results,

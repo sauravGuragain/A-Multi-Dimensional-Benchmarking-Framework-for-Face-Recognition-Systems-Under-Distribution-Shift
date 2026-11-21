@@ -178,6 +178,7 @@ class HOGSVMRecognizer(TraditionalRecognizerMixin):
         self._clf = SVC(
             C=self._svm_C, kernel="rbf", gamma=self._svm_gamma,
             probability=True, max_iter=5000,
+            random_state=getattr(self, "_random_state", None),
         )
         self._clf.fit(X_feat, y_train)
         self._is_trained = True

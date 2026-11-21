@@ -53,3 +53,22 @@ def test_shipped_deep_configs(model):
     assert len(c.perturbation_schedule.perturbation_types) == 16
     assert c.perturbation_schedule.severity_levels == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
     assert c.random_seed == 42 and c.output_dir.rstrip("/").endswith(f"lfw_fold0_deep_{model}")
+
+
+def test_weight_hashes_recorded_for_insightface_and_dlib(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pack = tmp_path / ".insightface" / "models" / "antelopev2" / "antelopev2"       # nested unzip layout
+    pack.mkdir(parents=True)
+    (pack / "glintr100.onnx").write_bytes(b"abc")
+    dl = tmp_path / ".cache" / "dlib"
+    dl.mkdir(parents=True)
+    (dl / "dlib_face_recognition_resnet_model_v1.dat").write_bytes(b"abc")
+    w = v.run_provenance(["insightface", "dlib_fr"])["weights"]
+    sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    assert w["insightface"] == {"glintr100.onnx": sha} and w["dlib_fr"] == {"dlib_face_recognition_resnet_model_v1.dat": sha}
+
+
+def test_missing_insightface_or_dlib_weights_are_not_recorded_not_errors(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    w = v.run_provenance(["insightface", "dlib_fr"])["weights"]
+    assert w == {"insightface": v.sm.NOT_RECORDED, "dlib_fr": v.sm.NOT_RECORDED}

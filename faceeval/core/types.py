@@ -853,6 +853,9 @@ class ExperimentConfig:
     test_fraction: float = 0.3
     val_fraction: float = 0.1
     k_folds: int | None = None
+    verification_fold: int = 0
+    dlib_alignment: str = "dlib_chip"
+    classical_rng: str = "global_seed"
     # Evaluation protocol: "identification" (closed-set, default),
     # "lfw_fold0_verification" (Fold 0 pair protocol) or "both".
     evaluation_protocol: str = "identification"
@@ -928,6 +931,14 @@ class ExperimentConfig:
         d["custom_deployment_weights"] = {
             k: v.to_dict() for k, v in self.custom_deployment_weights.items()
         }
+        if d.get("verification_fold") == 0:
+            # Keep the config hash (and so run_id and the result store's duplicate-run detection) of every
+            # pre-existing configuration unchanged: the reference fold is the default and is not serialised.
+            d.pop("verification_fold")
+        if d.get("dlib_alignment") == "dlib_chip":      # default: not serialised (hash of every existing config unchanged)
+            d.pop("dlib_alignment")
+        if d.get("classical_rng") == "global_seed":     # default (historical protocol): not serialised
+            d.pop("classical_rng")
         return d
 
 
