@@ -1,0 +1,2 @@
+model,n_conditions,n_conditions_valid_status_ok,failed_embeddings_summed_over_conditions_NOT_UNIQUE_IMAGES,n_conditions_with_failures,min_valid_pair_rate_balanced,n_images_valid_in_every_condition,n_common_valid_pairs,mean_e2e_auc,mean_valid_auc,mean_common_auc,mean_e2e_eer,mean_valid_eer,mean_common_eer
+arcface,96,91,12969,31,0.0,0,0,0.9180780659652741,0.9772131215128468,nan,0.10579062000207952,0.04630740113435379,nan

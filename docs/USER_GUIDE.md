@@ -77,7 +77,7 @@ Prints what the run recorded about itself in its database (timestamps, duration,
 
 **Which protocol is this?** `results` shows **closed-set identification**: each test face is assigned to one of 200 known people; "accuracy" is the share assigned correctly. This is the thesis experiment.
 
-**Verification (custom Fold 0) is different.** Verification asks "are these two photos the same person?" using pairs of images and a decision threshold, on people never seen in training. The split is this project's own identity-disjoint "Fold 0"; it is **not the official LFW View 2 protocol**, so it must not be compared with published View 2 numbers. Its numbers (TAR, FAR, balanced accuracy) for the four classical models live in `reports/experiment_results/` and are described in its README. The FaceNet and ArcFace Fold-0 results (96 conditions each) are on the maintainer's Mac and are not in Git (section 5b). Never compare an identification accuracy with a verification accuracy, and never put them in one table.
+**Verification (custom Fold 0) is different.** Verification asks "are these two photos the same person?" using pairs of images and a decision threshold, on people never seen in training. The split is this project's own identity-disjoint "Fold 0"; it is **not the official LFW View 2 protocol**, so it must not be compared with published View 2 numbers. The committed results for all six models (TAR, FAR, balanced accuracy, AUC, EER; 96 conditions each) are in `benchmarks/lfw_fold0_2026-11-20/` (see its README); the classical models' results also remain in `reports/experiment_results/`. The protocol is in `docs/PROTOCOL.md` and the output map in `docs/RESULTS_MAP.md` (section 5b). Never compare an identification accuracy with a verification accuracy, and never put them in one table.
 
 | Term | Meaning |
 |---|---|
@@ -103,56 +103,58 @@ A difference of a few images is not meaningful: with the recorded clean accuraci
 
 The Fold-0 verification benchmark covers six models (Eigenfaces, Fisherfaces, LBPH, HOG-SVM, FaceNet, ArcFace) over 16 perturbations x 6 severities. The analysis tool reads the archived result files, runs no experiment, loads no model and does not need the dataset. It writes only into the **new** folder you name:
 
+For the committed archive, the deep models come from **one combined run** (FaceNet + ArcFace, 192 rows):
+
 ```bash
-python -m faceeval.analysis.fold0_results \
+python3 -m faceeval.analysis.fold0_results \
     --results-root reports/experiment_results \
-    --facenet-run <FACENET_VERIFICATION_RUN_DIR> \
-    --arcface-run <ARCFACE_VERIFICATION_RUN_DIR> \
+    --deep-run benchmarks/lfw_fold0_2026-11-20/deep_core \
     --out <NEW_OUTPUT_DIRECTORY>
 ```
 
-Use the Python from your environment (section 2). `--facenet-run` and `--arcface-run` each point to a run directory that contains `verification_results.csv` and `verification_results.json` (under `runs/` on your Mac, not under the results root). `--out` must be a new or empty folder (`--overwrite` allows a non-empty one). If a check fails the tool prints `ANALYSIS REFUSED: ...` and writes nothing into the archives.
+If FaceNet and ArcFace instead come from two separate per-model runs, use `--facenet-run <DIR> --arcface-run <DIR>` in place of `--deep-run`; each directory must contain `verification_results.csv` and `verification_results.json`. The two forms cannot be mixed (each deep model must come from exactly one run). Use the Python from your environment (section 2). `--out` must be a new or empty folder (`--overwrite` allows a non-empty one). If a check fails the tool prints `ANALYSIS REFUSED: ...` and writes nothing into the archives.
 
-Result: `tables/` (13 CSV files), `figures/` (7 PNG files with the deep runs; 6 without them, because the failure-rate figure needs deep-model results) and `provenance.json`. **These outputs are local artifacts and are not committed to Git**; `reports/` is git-ignored.
+Result: `tables/` (13 CSV files), `figures/` (7 PNG files with the deep runs; 6 without them, because the failure-rate figure needs deep-model results) and `provenance.json`. The outputs generated from the committed archive are **committed** in `benchmarks/lfw_fold0_2026-11-20/analysis/` (see `docs/RESULTS_MAP.md`); a new output directory you create under the git-ignored `reports/` stays local unless force-added.
 
-How to read the deep-model rows: they are **end-to-end** results. When no embedding can be produced for an image (mainly ArcFace's face detector finding no face), it becomes a zero vector and its pairs are **still scored**, not removed. So ArcFace AUC and EER include detection failures; see `table12`, `table13` and figure 7 for the failure counts and rates. FaceNet and ArcFace also differ in crop or alignment, input size and detection, so the comparison is between pipelines, not between backbones. Brightness, contrast and gamma are centred at severity 0.5, so their curves are V-shaped. Never mix these Fold-0 results with the identification results of section 5.
+How to read the deep-model rows: they are **end-to-end** results. When no embedding can be produced for an image (mainly ArcFace's face detector finding no face), it becomes a zero vector and its pairs are **still scored**, not removed. So ArcFace AUC and EER include detection failures; see `table12`, `table13` and figure 7 for the failure counts and rates. FaceNet and ArcFace also differ in crop or alignment, input size and detection, so the comparison is between pipelines, not between backbones. Brightness, contrast and gamma are centred at severity 0.5, so their distance-from-neutral curves are V-shaped. Never mix these Fold-0 results with the identification results of section 5.
 
 ## 5c. Additional analysis tools (read-only on run directories; every one writes to a NEW directory)
 
-All commands below only READ archived run directories. Use the Python from your environment (section 2). **None of them has been run on the real FaceNet/ArcFace archives yet** (see `docs/EXPERIMENT_EVIDENCE_RECORD.md`, Addendum 4).
+All commands below only READ archived run directories. Use the Python from your environment (section 2). **Only `valid_pairs` has been run on the real FaceNet/ArcFace archive** (outputs committed in `benchmarks/lfw_fold0_2026-11-20/analysis/valid_pairs/`; see `docs/RESULTS_MAP.md`). The others have not been run on real data (see `docs/EXPERIMENT_EVIDENCE_RECORD.md`, Addendum 4).
 
 ```bash
-# valid-pairs-only re-analysis of ONE deep run (refuses if the archived numbers cannot be reproduced from scores/*.npz)
-python -m faceeval.analysis.valid_pairs --run <DEEP_RUN_DIR> --out <NEW_DIR>
+# valid-pairs-only re-analysis of ONE model (refuses if the archived numbers cannot be reproduced from scores/*.npz).
+# A run that holds several models, such as the committed deep_core run, requires --model NAME (facenet or arcface).
+python3 -m faceeval.analysis.valid_pairs --run <DEEP_RUN_DIR> [--model NAME] --out <NEW_DIR>
 
 # runtime and peak memory, one subprocess per model (needs the real weights and a folder of face images).
 # Reports separately: initialisation, cold first call, preprocessing, per-image latency (batch 1), batched throughput, peak RSS.
 # --device: auto (what the experiments use: CUDA if present else CPU) | cpu | cuda | mps (Apple Silicon) | best. An unavailable
 # explicit device is REFUSED, never replaced. Only FaceNet (torch) can move; ArcFace/InsightFace (ONNX Runtime) and dlib are cpu/auto.
-python -m faceeval.analysis.efficiency --models facenet arcface --images-dir <IMAGES_DIR> --n-images 200 --warmup 5 --batch-sizes 8 32 --device auto --out <NEW_DIR>
+python3 -m faceeval.analysis.efficiency --models facenet arcface --images-dir <IMAGES_DIR> --n-images 200 --warmup 5 --batch-sizes 8 32 --device auto --out <NEW_DIR>
 # run it again with --device mps for FaceNet on Apple Silicon; the JSON's "comparability" block lists what differs between rows
 
 # subgroup metrics, ONLY with an external CSV (image_id,group); nothing is inferred; LFW here has no such labels
-python -m faceeval.analysis.fairness --run <DEEP_RUN_DIR> --attributes <ATTRIBUTES_CSV> --source "<where the labels come from and their licence>" --out <NEW_DIR>
+python3 -m faceeval.analysis.fairness --run <DEEP_RUN_DIR> --attributes <ATTRIBUTES_CSV> --source "<where the labels come from and their licence>" --out <NEW_DIR>
 
 # mean / SD over several identity-disjoint split runs (each run made with its own random_seed / verification_fold).
 # Every row says how far its interval may be trusted (interval_status) and whether the model is pretrained or trained per split.
-python -m faceeval.analysis.multi_split --runs <RUN_DIR_1> <RUN_DIR_2> ... --out <NEW_DIR>
+python3 -m faceeval.analysis.multi_split --runs <RUN_DIR_1> <RUN_DIR_2> ... --out <NEW_DIR>
 # refuses stub runs, runs with different model sets, and runs that differ in protocol, alignment, dataset scope, classical RNG protocol or weight hashes (only seed/fold may differ);
 # malformed weight provenance (empty object, bad digest, unknown string) is always refused; differing recorded hashes are never allowed
 # add --allow-unverified-weights only if an older run (made before provenance) is known to use the same weights
 
 # figures, drawn only from the files above (calibration_results.csv, multi_split_by_condition.csv, valid_pairs_by_condition.csv, efficiency_results.json)
-python -m faceeval.analysis.figures calibration --input <RUN_ID.calibration dir> --out <NEW_DIR>
-python -m faceeval.analysis.figures multi_split --input <MULTI_SPLIT_DIR> --metric auc --perturbation clean --severity 0 --out <NEW_DIR>
-python -m faceeval.analysis.figures valid_pairs --input <VALID_PAIRS_DIR> --out <NEW_DIR>
-python -m faceeval.analysis.figures efficiency  --input <EFFICIENCY_DIR> --out <NEW_DIR>
+python3 -m faceeval.analysis.figures calibration --input <RUN_ID.calibration dir> --out <NEW_DIR>
+python3 -m faceeval.analysis.figures multi_split --input <MULTI_SPLIT_DIR> --metric auc --perturbation clean --severity 0 --out <NEW_DIR>
+python3 -m faceeval.analysis.figures valid_pairs --input <VALID_PAIRS_DIR> --out <NEW_DIR>
+python3 -m faceeval.analysis.figures efficiency  --input <EFFICIENCY_DIR> --out <NEW_DIR>
 
 # which package versions a COMPLETED run recorded (to reproduce the environment; prints pins, refuses to guess if none were recorded)
-python -m faceeval.analysis.env_pins --run <DEEP_RUN_DIR> --print          # or --check for installed-vs-recorded
+python3 -m faceeval.analysis.env_pins --run <DEEP_RUN_DIR> --print          # or --check for installed-vs-recorded
 
 # index of which evidence products exist (claims nothing about missing ones)
-python -m faceeval.analysis.evidence_index --fold0-analysis <DIR> --valid-pairs <DIR> --out <NEW_DIR>
+python3 -m faceeval.analysis.evidence_index --fold0-analysis <DIR> --valid-pairs <DIR> --out <NEW_DIR>
 ```
 
 Calibration is a runner option, not a separate tool: set `compute_calibration: true` in a Fold-0 verification config. It fits Platt scaling on the clean validation pairs only and writes `<run_id>.calibration/` next to the run directory (the run directory itself is unchanged, so the integrity checker still passes).
