@@ -1,0 +1,27 @@
+FaceEval-X LFW Fold 0 -- post-hoc analysis of the archived benchmark (generated in a Linux cloud sandbox)
+
+Source of truth : origin/main @ 4eb53d8 (Merge pull request #8), exported without modification, plus the code changes in
+                  code_changes.patch (fold0_results --deep-run, valid_pairs --model). No benchmark was run.
+Inputs (read only, byte-identical before and after; archive SHA256SUMS verified 216/216 before and after):
+  reports/experiment_results/classical/            (Fisherfaces, LBPH, HOG-SVM; 288 rows)
+  reports/experiment_results/eigenfaces_final/     (Eigenfaces; 96 rows)
+  reports/experiment_results/eigenfaces_per_image_noise/   (historical run, table11 only)
+  benchmarks/lfw_fold0_2026-11-20/deep_core/       (FaceNet + ArcFace combined run, 192 rows, scores/*.npz)
+Environment     : Python 3.12.3, NumPy 1.26.4, matplotlib 3.11.2 (cloud sandbox; not the Mac)
+
+Commands (run from the repository root):
+  python -m faceeval.analysis.fold0_results --results-root reports/experiment_results \
+      --deep-run benchmarks/lfw_fold0_2026-11-20/deep_core --out benchmarks/lfw_fold0_2026-11-20/analysis/six_model
+  python -m faceeval.analysis.valid_pairs --run benchmarks/lfw_fold0_2026-11-20/deep_core --model facenet \
+      --out benchmarks/lfw_fold0_2026-11-20/analysis/valid_pairs/facenet
+  python -m faceeval.analysis.valid_pairs --run benchmarks/lfw_fold0_2026-11-20/deep_core --model arcface \
+      --out benchmarks/lfw_fold0_2026-11-20/analysis/valid_pairs/arcface
+
+Notes
+  * The "path" and "run_directory" fields inside the provenance JSON files are the SANDBOX paths (/tmp/w4/...). The input
+    SHA-256 values in the same files are what identify the inputs.
+  * Deep-model values are END-TO-END archived results (failed embeddings = zero vectors, their pairs are kept). The
+    valid_pairs tables are conditional and selection-biased; see valid_pairs_provenance.json "semantics".
+  * ArcFace: no image is valid in every condition (n_images_valid_in_every_condition = 0), so the common_* columns are NaN.
+  * Figures were rendered with matplotlib 3.11.2; other versions may differ in pixels, not in the tables.
+  * SHA256SUMS in this directory covers every file here except itself.

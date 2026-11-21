@@ -1,0 +1,258 @@
+{
+  "cross_run_checks": {
+    "recorded_not_compared": [
+      "code_version",
+      "manifest_sha256",
+      "numpy_version",
+      "python_version",
+      "run_provenance"
+    ],
+    "required_equal": [
+      "split_content_sha256",
+      "pair_content_sha256",
+      "dataset_fingerprint_sha256",
+      "noise_protocol_version",
+      "noise_master_seed",
+      "fold",
+      "k_folds",
+      "seed"
+    ]
+  },
+  "deep_run_directories": {
+    "deep_combined": "/tmp/w4/benchmarks/lfw_fold0_2026-11-20/deep_core"
+  },
+  "failure_semantics": "Deep-model metrics are archived end-to-end results: embeddings that failed are zero vectors and their pairs are still scored (not removed). They are not valid-pairs-only recognition performance. Failure counts summed across conditions are not unique failed images.",
+  "historical_run": {
+    "eigenfaces_per_image_noise": {
+      "code_version": "e0d0eae8444e93b6110740aae81442385048316b",
+      "counts_match_official_lfw": true,
+      "dataset_fingerprint_sha256": "df3e734c6e5033224011c2587fd2c7671ce2f86d499cb57404f50f0d12337230",
+      "failures": 0,
+      "fold": 0,
+      "full_lfw": true,
+      "k_folds": 10,
+      "manifest_sha256": "3c1cf7a77791a2c42cdf05f5115594fefb904cc602f3be5a77249f967b0a7116",
+      "n_rows_csv": 96,
+      "n_rows_expected": null,
+      "n_rows_json": 96,
+      "noise_master_seed": 42,
+      "noise_protocol_version": "per_image_v2",
+      "noise_stream_matches_approved": true,
+      "numpy_version": "1.26.4",
+      "pair_content_sha256": {
+        "test": "c4a1ff760be19948182293662cc51374ba5020960835274ef3b414dc9587cbed",
+        "validation": "8aa863111fa0d0d2bf6025acf7d2bccb999e010edd71ce61a8c2c2fa8a901153"
+      },
+      "pair_manifest_sha256": {
+        "test": "7c54c6005316e073c809cc54af077f4af32ac4d659fdd400d23e5888f552d4ba",
+        "validation": "8fadd264492b49c917e35fc3d467f92c854d19110cac59199a72fcbbd4c297d4"
+      },
+      "preprocessing": null,
+      "python_version": "3.12.14",
+      "run_provenance": "not_recorded",
+      "seed": 42,
+      "split_content_sha256": "073c6291477a6d99275cf9a48eca5dd0b10e13ddb881778e5357e40ff0230c24",
+      "status": "COMPLETE",
+      "stub_backbones": [],
+      "threshold_protocol": "max-accuracy on clean validation balanced pairs; frozen for test"
+    }
+  },
+  "input_files": {
+    "classical": {
+      "verification_results.csv": {
+        "path": "/tmp/w4/reports/experiment_results/classical/verification_results.csv",
+        "sha256": "cc2f207923462a30182a890acb45925db2c0891b866991fb2afa2097a6f83d6e"
+      },
+      "verification_results.json": {
+        "path": "/tmp/w4/reports/experiment_results/classical/verification_results.json",
+        "sha256": "36d549cc507327a21fa3185536d5ebb938984dd233930f204c758c56f1458453"
+      }
+    },
+    "deep_combined": {
+      "verification_results.csv": {
+        "path": "/tmp/w4/benchmarks/lfw_fold0_2026-11-20/deep_core/verification_results.csv",
+        "sha256": "ade380e201ed4eca963e96d16b17473c7459891c2398a019788262ebe3fa6fd8"
+      },
+      "verification_results.json": {
+        "path": "/tmp/w4/benchmarks/lfw_fold0_2026-11-20/deep_core/verification_results.json",
+        "sha256": "d01d49bb909c1fae3219f77f28568794c858aaa0aa29f0f5ba5004d5528f43ce"
+      }
+    },
+    "eigenfaces_final": {
+      "verification_results.csv": {
+        "path": "/tmp/w4/reports/experiment_results/eigenfaces_final/verification_results.csv",
+        "sha256": "dea191602773293d68cfe7c291a2c78680136cfc08cf05de35a602e6ebe83b8f"
+      },
+      "verification_results.json": {
+        "path": "/tmp/w4/reports/experiment_results/eigenfaces_final/verification_results.json",
+        "sha256": "6d57f464b0037334d73784f9060d6b1362b481a1b958ea7151d4da18ce128a71"
+      }
+    }
+  },
+  "models": [
+    "eigenfaces",
+    "fisherfaces",
+    "lbph",
+    "hog_svm",
+    "facenet",
+    "arcface"
+  ],
+  "n_perturbations": 16,
+  "n_primary_rows": 576,
+  "primary_runs": {
+    "classical": {
+      "code_version": "34608f4eb8f1e073c254d53cbae9e64c82150710",
+      "counts_match_official_lfw": true,
+      "dataset_fingerprint_sha256": "df3e734c6e5033224011c2587fd2c7671ce2f86d499cb57404f50f0d12337230",
+      "failures": 0,
+      "fold": 0,
+      "full_lfw": true,
+      "k_folds": 10,
+      "manifest_sha256": "d36e8ae060eae1bea9df663351b00f44f5156330c06f55ad77234ef8fc7bdd05",
+      "n_rows_csv": 288,
+      "n_rows_expected": null,
+      "n_rows_json": 288,
+      "noise_master_seed": 42,
+      "noise_protocol_version": "per_image_v2",
+      "noise_stream_matches_approved": true,
+      "numpy_version": "1.26.4",
+      "pair_content_sha256": {
+        "test": "c4a1ff760be19948182293662cc51374ba5020960835274ef3b414dc9587cbed",
+        "validation": "8aa863111fa0d0d2bf6025acf7d2bccb999e010edd71ce61a8c2c2fa8a901153"
+      },
+      "pair_manifest_sha256": {
+        "test": "7c54c6005316e073c809cc54af077f4af32ac4d659fdd400d23e5888f552d4ba",
+        "validation": "8fadd264492b49c917e35fc3d467f92c854d19110cac59199a72fcbbd4c297d4"
+      },
+      "preprocessing": null,
+      "python_version": "3.12.14",
+      "run_provenance": "not_recorded",
+      "seed": 42,
+      "split_content_sha256": "073c6291477a6d99275cf9a48eca5dd0b10e13ddb881778e5357e40ff0230c24",
+      "status": "COMPLETE",
+      "stub_backbones": [],
+      "threshold_protocol": "max-accuracy on clean validation balanced pairs; frozen for test"
+    },
+    "deep_combined": {
+      "code_version": "f6d5e12f08e0bf484f44dd68f4a04bafe423403c",
+      "counts_match_official_lfw": true,
+      "dataset_fingerprint_sha256": "df3e734c6e5033224011c2587fd2c7671ce2f86d499cb57404f50f0d12337230",
+      "failures": 0,
+      "fold": 0,
+      "full_lfw": true,
+      "k_folds": 10,
+      "manifest_sha256": "aba444ef6c85ac1f04d72a659b6c9636fb3f0a7476cbef454e75082e56762ffd",
+      "n_rows_csv": 192,
+      "n_rows_expected": 192,
+      "n_rows_json": 192,
+      "noise_master_seed": 42,
+      "noise_protocol_version": "per_image_v2",
+      "noise_stream_matches_approved": true,
+      "numpy_version": "1.26.4",
+      "pair_content_sha256": {
+        "test": "c4a1ff760be19948182293662cc51374ba5020960835274ef3b414dc9587cbed",
+        "validation": "8aa863111fa0d0d2bf6025acf7d2bccb999e010edd71ce61a8c2c2fa8a901153"
+      },
+      "pair_manifest_sha256": {
+        "test": "7c54c6005316e073c809cc54af077f4af32ac4d659fdd400d23e5888f552d4ba",
+        "validation": "8fadd264492b49c917e35fc3d467f92c854d19110cac59199a72fcbbd4c297d4"
+      },
+      "preprocessing": {
+        "arcface": {
+          "alignment": "affine_fixed_landmarks",
+          "crop_fraction": null,
+          "normalization_mode": "arcface"
+        },
+        "facenet": {
+          "alignment": "centre_crop",
+          "crop_fraction": 0.8,
+          "normalization_mode": "facenet_fixed"
+        }
+      },
+      "python_version": "3.12.14",
+      "run_provenance": {
+        "code_dirty": false,
+        "machine": "arm64",
+        "packages": {
+          "Pillow": "10.2.0",
+          "facenet-pytorch": "2.6.0",
+          "insightface": "2.0",
+          "onnx": "1.23.0",
+          "onnxruntime": "1.30.0",
+          "opencv-python": "4.11.0.86",
+          "scikit-image": "0.24.0",
+          "scikit-learn": "1.9.1",
+          "scipy": "1.13.1",
+          "torch": "2.2.2",
+          "torchvision": "0.17.2"
+        },
+        "platform": "macOS-27.2.1-arm64-arm-64bit",
+        "weights": {
+          "arcface": {
+            "1k3d68.onnx": "df5c06b8a0c12e422b2ed8947b8869faa4105387f199c477af038aa01f9a45cc",
+            "2d106det.onnx": "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
+            "det_10g.onnx": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+            "genderage.onnx": "4fde69b1c810857b88c64a335084f1c3fe8f01246c9a191b48c7bb756d6652fb",
+            "w600k_r50.onnx": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
+          },
+          "facenet": {
+            "20180402-114759-vggface2.pt": "281cebca8662831adb987a874bdcb36e73f5b1c6dc5ee5878f305e985625d99b"
+          }
+        }
+      },
+      "seed": 42,
+      "split_content_sha256": "073c6291477a6d99275cf9a48eca5dd0b10e13ddb881778e5357e40ff0230c24",
+      "status": "COMPLETE",
+      "stub_backbones": [],
+      "threshold_protocol": "max-accuracy on clean validation balanced pairs; frozen for test"
+    },
+    "eigenfaces_final": {
+      "code_version": "34608f4eb8f1e073c254d53cbae9e64c82150710",
+      "counts_match_official_lfw": true,
+      "dataset_fingerprint_sha256": "df3e734c6e5033224011c2587fd2c7671ce2f86d499cb57404f50f0d12337230",
+      "failures": 0,
+      "fold": 0,
+      "full_lfw": true,
+      "k_folds": 10,
+      "manifest_sha256": "d36e8ae060eae1bea9df663351b00f44f5156330c06f55ad77234ef8fc7bdd05",
+      "n_rows_csv": 96,
+      "n_rows_expected": null,
+      "n_rows_json": 96,
+      "noise_master_seed": 42,
+      "noise_protocol_version": "per_image_v2",
+      "noise_stream_matches_approved": true,
+      "numpy_version": "1.26.4",
+      "pair_content_sha256": {
+        "test": "c4a1ff760be19948182293662cc51374ba5020960835274ef3b414dc9587cbed",
+        "validation": "8aa863111fa0d0d2bf6025acf7d2bccb999e010edd71ce61a8c2c2fa8a901153"
+      },
+      "pair_manifest_sha256": {
+        "test": "7c54c6005316e073c809cc54af077f4af32ac4d659fdd400d23e5888f552d4ba",
+        "validation": "8fadd264492b49c917e35fc3d467f92c854d19110cac59199a72fcbbd4c297d4"
+      },
+      "preprocessing": null,
+      "python_version": "3.12.14",
+      "run_provenance": "not_recorded",
+      "seed": 42,
+      "split_content_sha256": "073c6291477a6d99275cf9a48eca5dd0b10e13ddb881778e5357e40ff0230c24",
+      "status": "COMPLETE",
+      "stub_backbones": [],
+      "threshold_protocol": "max-accuracy on clean validation balanced pairs; frozen for test"
+    }
+  },
+  "run_directories": {
+    "classical": "/tmp/w4/reports/experiment_results/classical",
+    "deep_combined": "/tmp/w4/benchmarks/lfw_fold0_2026-11-20/deep_core",
+    "eigenfaces_final": "/tmp/w4/reports/experiment_results/eigenfaces_final"
+  },
+  "severities": [
+    0.0,
+    0.2,
+    0.4,
+    0.6,
+    0.8,
+    1.0
+  ],
+  "source": "/tmp/w4/reports/experiment_results",
+  "stale_files_not_rewritten": []
+}
