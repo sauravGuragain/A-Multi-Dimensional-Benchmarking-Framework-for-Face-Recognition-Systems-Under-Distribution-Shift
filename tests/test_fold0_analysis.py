@@ -1256,3 +1256,282 @@ def test_figures_render_for_all_zero_and_all_failure_cases(six, tmp_path):
     rows, _ = A.load_primary(archive, deep_runs={"arcface": deep["arcface"]})        # ArcFace only: every perturbed image failed
     paths = A.make_figures(rows, A.table_cells_long(rows), tmp_path / "all")
     assert len(paths) == 7 and all(p.stat().st_size > 2000 for p in paths)
+
+
+# =====================================================================================================================
+# One COMBINED deep run (FaceNet + ArcFace in a single verification run, e.g. benchmarks/lfw_fold0_2026-11-20/deep_core)
+# =====================================================================================================================
+COMBINED = A.COMBINED_DEEP_RUN
+DEEP_CORE = REPO / "benchmarks" / "lfw_fold0_2026-11-20" / "deep_core"
+needs_deep_core = pytest.mark.skipif(not (DEEP_CORE / "verification_results.csv").is_file() or not (REAL_ROOT / "classical").is_dir(),
+                                     reason="the archived combined deep run / classical archive is not present")
+
+
+def _write_combined(deep, rows, **meta_over):
+    d = deep[COMBINED]
+    write_run(d.parent, d.name, rows, meta_for(rows, code="dddd", manifest="m_deep", **meta_over))
+
+
+@pytest.fixture
+def combined(archive, tmp_path):
+    """The four-model archive plus ONE run directory that holds both deep models (192 rows)."""
+    d = tmp_path / "runs" / "deep_core_run" / "verification" / "5ee3"
+    deep = {COMBINED: d}
+    _write_combined(deep, synth_rows(["facenet", "arcface"]))
+    return archive, deep
+
+
+def _cond_key(r):
+    return (r["model"], r["perturbation"], r["severity"])
+
+
+def _pick(rows, model, perturbation="gaussian_blur", severity=0.4):
+    return next(r for r in rows if r["model"] == model and r["perturbation"] == perturbation and r["severity"] == severity)
+
+
+def test_combined_deep_run_gives_the_same_576_rows_as_two_separate_runs(six, combined):
+    archive, separate = six
+    _, comb = combined
+    rows_sep, prov_sep = A.load_primary(archive, deep_runs=separate)
+    rows_comb, prov_comb = A.load_primary(archive, deep_runs=comb)
+    assert len(rows_comb) == 576 and {r["model"] for r in rows_comb} == set(SIX)
+    assert (json.dumps(sorted(rows_comb, key=_cond_key), sort_keys=True)
+            == json.dumps(sorted(rows_sep, key=_cond_key), sort_keys=True))
+    assert set(prov_comb["runs"]) == {"classical", "eigenfaces_final", COMBINED}
+    p = prov_comb["runs"][COMBINED]
+    assert p["n_rows_csv"] == p["n_rows_json"] == 192 and p["code_version"] == "dddd" and p["manifest_sha256"] == "m_deep"
+    assert set(prov_comb["input_files"][COMBINED]) == {"verification_results.csv", "verification_results.json"}
+    assert prov_comb["run_directories"][COMBINED] == str(comb[COMBINED].resolve())
+
+
+def test_combined_and_separate_runs_write_identical_tables_and_all_figures(six, combined, tmp_path):
+    archive, separate = six
+    _, comb = combined
+    a, b = tmp_path / "out_sep", tmp_path / "out_comb"
+    A.run_analysis(archive, a, figures=True, deep_runs=separate)
+    prov_b = A.run_analysis(archive, b, figures=True, deep_runs=comb)
+    names = sorted(p.name for p in (a / "tables").iterdir())
+    assert names == sorted(p.name for p in (b / "tables").iterdir()) and len(names) == 13
+    for n in names:
+        assert (a / "tables" / n).read_bytes() == (b / "tables" / n).read_bytes(), n
+    assert len(list((b / "figures").glob("fig*.png"))) == 7 and "provenance" in prov_b
+    prov = json.loads((b / "provenance.json").read_text())
+    assert prov["n_primary_rows"] == 576 and prov["models"] == list(SIX)
+    assert set(prov["deep_run_directories"]) == {COMBINED} and set(prov["primary_runs"]) == {"classical", "eigenfaces_final", COMBINED}
+
+
+def test_combined_run_does_not_touch_any_input(combined, tmp_path):
+    archive, deep = combined
+    before = (digest_tree(archive), digest_tree(deep[COMBINED]))
+    A.run_analysis(archive, tmp_path / "out", figures=False, deep_runs=deep)
+    assert (digest_tree(archive), digest_tree(deep[COMBINED])) == before
+
+
+def test_combined_run_requires_exactly_the_two_deep_models_and_each_models_96_rows(combined):
+    archive, deep = combined
+    rows = synth_rows(["facenet", "arcface"])
+    A.validate_run(rows, "deep", A.DEEP_MODELS)                                    # exactly 192 rows: accepted
+    with pytest.raises(A.AnalysisError, match="condition grid differs"):             # 191 rows
+        A.validate_run(rows[:-1], "deep", A.DEEP_MODELS)
+    with pytest.raises(A.AnalysisError, match="duplicate"):                          # 193 rows
+        A.validate_run(rows + [dict(rows[0])], "deep", A.DEEP_MODELS)
+    with pytest.raises(A.AnalysisError, match="model coverage differs"):             # one deep model missing
+        A.validate_run(synth_rows(["facenet"]), "deep", A.DEEP_MODELS)
+
+
+def _only(model):
+    return lambda rows: [r for r in rows if r["model"] == model]
+
+
+def _drop_last(rows):
+    return rows[:-1]
+
+
+def _duplicate(rows):
+    rows = list(rows)
+    rows[5] = dict(rows[0])
+    return rows
+
+
+def _extra_classical_model(rows):
+    extra = synth_rows(["eigenfaces"])
+    for r in extra:                                         # same columns as the deep rows so that the CSV can be written
+        r.update(normalization_mode="x", alignment="y", crop_fraction=0.8, val_balanced_accuracy=0.9, val_n_failed_embeddings=0,
+                 n_test_images=N_IMG, n_failed_embeddings=0, n_failed_pairs_balanced=0, n_failed_pairs_full=0, scores_file="x")
+    return rows + extra
+
+
+def _threshold_varies(rows):
+    _pick(rows, "arcface")["threshold"] += 0.05
+    return rows
+
+
+def _clean_baseline_differs(rows):
+    _pick(rows, "facenet", "gaussian_blur", 0.0)["accuracy"] -= 0.02
+    return rows
+
+
+def _failure_counters_inconsistent(rows):
+    _pick(rows, "arcface").update(n_failed_pairs_balanced=5, n_failed_pairs_full=5, n_failed_embeddings=0)
+    return rows
+
+
+def _stub_backbone(rows):
+    _pick(rows, "facenet")["backbone"] = "STUB"
+    return rows
+
+
+@pytest.mark.parametrize("mutate,match", [
+    (_only("facenet"), r"expected models \['arcface', 'facenet'\], found \['facenet'\]"),
+    (_only("arcface"), r"expected models \['arcface', 'facenet'\], found \['arcface'\]"),
+    (_extra_classical_model, r"expected models \['arcface', 'facenet'\], found \['arcface', 'eigenfaces', 'facenet'\]"),
+    (_drop_last, "condition grid differs"),
+    (_duplicate, "duplicate"),
+    (_threshold_varies, "frozen threshold is not constant"),
+    (_clean_baseline_differs, "severity-0.0 'accuracy' differs"),
+    (_failure_counters_inconsistent, "without any failed embedding"),
+    (_stub_backbone, "STUB"),
+])
+def test_invalid_or_incomplete_combined_runs_are_rejected(combined, mutate, match):
+    archive, deep = combined
+    _write_combined(deep, mutate(synth_rows(["facenet", "arcface"])))
+    with pytest.raises(A.AnalysisError, match=match):
+        A.load_primary(archive, deep_runs=deep)
+
+
+@pytest.mark.parametrize("over,match", [
+    ({"status": "INCOMPLETE"}, "not a complete"),
+    ({"failures": ["boom"]}, "not a complete"),
+    ({"full_lfw": False}, "not a complete"),
+    ({"content_sha256": {"split": "other", "pairs": {"validation": "pv", "test": "pt"}}}, "disagree on 'split_content_sha256'"),
+    ({"dataset": {"fingerprint_sha256": "other", "counts_match_official_lfw": True}}, "disagree on 'dataset_fingerprint_sha256'"),
+    ({"seed": 7}, "disagree on 'seed'"),
+    ({"noise_seeding": {"protocol_version": "per_image_v2", "master_seed": 42,
+                        "stream_fingerprint": {"matches_approved_reference": False}}}, "noise stream"),
+])
+def test_combined_run_metadata_is_validated_like_any_other_run(combined, over, match):
+    archive, deep = combined
+    _write_combined(deep, synth_rows(["facenet", "arcface"]), **over)
+    with pytest.raises(A.AnalysisError, match=match):
+        A.load_primary(archive, deep_runs=deep)
+
+
+def test_combined_run_csv_and_json_must_agree(combined):
+    archive, deep = combined
+    rows = synth_rows(["facenet", "arcface"])
+    _write_combined(deep, rows)
+    bad = copy.deepcopy(rows)
+    _pick(bad, "facenet", "gamma", 0.6)["auc"] += 0.01
+    (deep[COMBINED] / "verification_results.json").write_text(json.dumps(meta_for(bad, code="dddd", manifest="m_deep")))
+    with pytest.raises(A.AnalysisError, match="auc differs between CSV"):
+        A.load_primary(archive, deep_runs=deep)
+    short = copy.deepcopy(rows)[:-1]
+    (deep[COMBINED] / "verification_results.json").write_text(json.dumps(meta_for(short, code="dddd", manifest="m_deep")))
+    with pytest.raises(A.AnalysisError, match="CSV has 192 rows but JSON has 191"):
+        A.load_primary(archive, deep_runs=deep)
+
+
+def test_combined_run_without_failure_columns_is_rejected(combined):
+    archive, deep = combined
+    d = deep[COMBINED]
+    text = (d / "verification_results.csv").read_text().splitlines()
+    k = text[0].split(",").index("n_failed_embeddings")
+    (d / "verification_results.csv").write_text(
+        "\n".join(",".join(c for i, c in enumerate(line.split(",")) if i != k) for line in text) + "\n")
+    js = json.loads((d / "verification_results.json").read_text())
+    for r in js["results"]:
+        r.pop("n_failed_embeddings")
+    (d / "verification_results.json").write_text(json.dumps(js))
+    with pytest.raises(A.AnalysisError, match="missing failure diagnostic column 'n_failed_embeddings'"):
+        A.load_primary(archive, deep_runs=deep)
+
+
+@pytest.mark.parametrize("name", ["facenet", "arcface"])
+def test_combined_run_cannot_be_mixed_with_a_per_model_run(six, combined, name):
+    archive, separate = six
+    _, comb = combined
+    with pytest.raises(A.AnalysisError, match="cannot be used together"):
+        A.load_primary(archive, deep_runs={COMBINED: comb[COMBINED], name: separate[name]})
+
+
+def test_a_combined_run_given_as_two_per_model_runs_is_still_refused_with_a_hint(combined):
+    """The old behaviour is kept (a per-model run must hold exactly its model); the message now says what to do."""
+    archive, deep = combined
+    d = deep[COMBINED]
+    with pytest.raises(A.AnalysisError, match=r"facenet: expected models \['facenet'\], found \['arcface', 'facenet'\].*--deep-run"):
+        A.load_primary(archive, deep_runs={"facenet": d, "arcface": d})
+    with pytest.raises(A.AnalysisError, match=r"arcface: expected models \['arcface'\], found \['arcface', 'facenet'\].*--deep-run"):
+        A.load_primary(archive, deep_runs={"arcface": d})
+
+
+def test_a_per_model_run_holding_the_wrong_model_gets_no_combined_hint(six):
+    archive, deep = six
+    _rewrite_deep(deep, "arcface", synth_rows(["facenet"]))
+    with pytest.raises(A.AnalysisError) as e:
+        A.load_primary(archive, deep_runs=deep)
+    assert "expected models ['arcface'], found ['facenet']" in str(e.value) and "--deep-run" not in str(e.value)
+
+
+def test_combined_run_output_directory_guards(combined, tmp_path):
+    archive, deep = combined
+    with pytest.raises(A.AnalysisError, match="inside the archived run directory"):
+        A.run_analysis(archive, deep[COMBINED] / "analysis", figures=False, deep_runs=deep)
+    with pytest.raises(A.AnalysisError, match="contains the archived run directory"):
+        A.run_analysis(archive, deep[COMBINED].parent, figures=False, deep_runs=deep)
+    out = tmp_path / "out"
+    A.run_analysis(archive, out, figures=False, deep_runs=deep)
+    with pytest.raises(A.AnalysisError, match="non-empty directory"):
+        A.run_analysis(archive, out, figures=False, deep_runs=deep)
+
+
+def test_cli_deep_run_option(combined, six, tmp_path, capsys):
+    archive, deep = combined
+    _, separate = six
+    out = tmp_path / "analysis_combined"
+    argv = ["--results-root", str(archive), "--deep-run", str(deep[COMBINED]), "--out", str(out), "--no-figures"]
+    assert A.main(argv) == 0
+    assert len(list((out / "tables").glob("table*.csv"))) == 13
+    assert A.main(argv) == 2 and "ANALYSIS REFUSED" in capsys.readouterr().out         # existing non-empty output directory
+    assert A.main(["--results-root", str(archive), "--deep-run", str(deep[COMBINED]), "--facenet-run", str(separate["facenet"]),
+                   "--out", str(tmp_path / "mixed"), "--no-figures"]) == 2
+    assert "cannot be used together" in capsys.readouterr().out and not (tmp_path / "mixed").exists()
+    with pytest.raises(SystemExit):
+        A.main(["--help"])
+    assert "--deep-run" in capsys.readouterr().out
+
+
+# ----------------------------------------------------------------------------- the real archived combined run
+@needs_deep_core
+def test_real_combined_archive_gives_six_models_and_is_not_modified(tmp_path):
+    before = (digest_tree(REAL_ROOT), digest_tree(DEEP_CORE))
+    rows, prov = A.load_primary(REAL_ROOT, deep_runs={COMBINED: DEEP_CORE})
+    assert len(rows) == 576 and {r["model"] for r in rows} == set(SIX)
+    p = prov["runs"][COMBINED]
+    assert p["status"] == "COMPLETE" and p["failures"] == 0 and p["n_rows_csv"] == p["n_rows_json"] == 192
+    assert p["stub_backbones"] == [] and p["noise_stream_matches_approved"] is True
+    A.run_analysis(REAL_ROOT, tmp_path / "out", figures=False, deep_runs={COMBINED: DEEP_CORE})
+    assert (digest_tree(REAL_ROOT), digest_tree(DEEP_CORE)) == before
+
+
+@needs_deep_core
+def test_real_combined_archive_tables_match_the_source_csv(tmp_path):
+    """Independent recomputation: the clean baseline of FaceNet and ArcFace and every ArcFace failure fraction are read
+    straight from the archived CSV with the ``csv`` module."""
+    out = tmp_path / "out"
+    A.run_analysis(REAL_ROOT, out, figures=False, deep_runs={COMBINED: DEEP_CORE})
+    src = {(r["model"], r["perturbation"], round(float(r["severity"]), 3)): r
+           for r in csv.DictReader(open(DEEP_CORE / "verification_results.csv"))}
+    assert len(src) == 192
+    t1 = {r["model"]: r for r in csv.DictReader(open(out / "tables" / "table1_clean_baseline.csv"))}
+    assert set(t1) == set(SIX)
+    for m in A.DEEP_MODELS:
+        clean = src[(m, "gamma", 0.0)]
+        for col in ("accuracy", "tar", "far", "auc", "eer", "threshold"):
+            assert float(t1[m][col]) == pytest.approx(float(clean[col]), abs=1e-9)
+    t12 = list(csv.DictReader(open(out / "tables" / "table12_failure_diagnostics_by_condition.csv")))
+    arc = {(r["perturbation"], round(float(r["severity"]), 3)): r for r in t12 if r["model"] == "arcface"}
+    assert len(arc) == 96
+    for (pert, sev), r in arc.items():
+        s = src[("arcface", pert, sev)]
+        assert int(float(r["n_failed_embeddings"])) == int(float(s["n_failed_embeddings"]))
+        assert int(float(r["n_test_images"])) == int(float(s["n_test_images"]))
