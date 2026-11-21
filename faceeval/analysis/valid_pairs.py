@@ -30,6 +30,11 @@ and full-pool) and the failure counts are recomputed from the saved ``valid`` ma
 CSV threshold and be constant over the run. ``--allow-archive-mismatch`` downgrades only the numeric reproduction check
 to a recorded warning.
 
+A run directory normally holds exactly one model. A COMBINED run (several models in one verification run, e.g. the
+archived ``deep_core`` run with FaceNet and ArcFace) is analysed one model at a time with ``--model NAME``: only that
+model's rows and score files are read and every check above is applied to them unchanged. Without ``--model`` a
+multi-model run is still refused.
+
 Inputs are only READ. Output goes to a NEW (or empty) directory that may not lie inside the run directory.
 """
 from __future__ import annotations
@@ -112,7 +117,7 @@ def _require(cond: bool, msg: str) -> None:
 
 
 # ---------------------------------------------------------------- analysis
-def analyse_run(run_dir: Path, allow_archive_mismatch: bool = False
+def analyse_run(run_dir: Path, allow_archive_mismatch: bool = False, model: str | None = None
                 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     run_dir = Path(run_dir)
     csv_path, json_path = run_dir / "verification_results.csv", run_dir / "verification_results.json"
@@ -127,7 +132,14 @@ def analyse_run(run_dir: Path, allow_archive_mismatch: bool = False
              "a row has no scores_file: this is not a deep-model run (classical runs save no score files)")
     labels_seen = [r["label"] + "|" + r["model"] for r in rows]
     _require(len(set(labels_seen)) == len(labels_seen), "duplicate (model, label) rows in the CSV")
-    _require(len({r["model"] for r in rows}) == 1, "the run directory must hold exactly one model")
+    models_in_run = sorted({r["model"] for r in rows})
+    n_rows_in_run = len(rows)
+    if model is not None:
+        _require(model in models_in_run, f"--model {model!r} is not in this run (models in the CSV: {models_in_run})")
+        rows = [r for r in rows if r["model"] == model]
+    _require(len(models_in_run) == 1 or model is not None,
+             f"the run directory must hold exactly one model, found {models_in_run}; to analyse one model of a "
+             f"multi-model run pass --model NAME")
 
     tp = np.load(pairs_path, allow_pickle=False)
     bal_pairs, bal_lab = np.asarray(tp["bal_pairs"], dtype=np.int64), np.asarray(tp["bal_labels"], dtype=bool)
@@ -219,6 +231,7 @@ def analyse_run(run_dir: Path, allow_archive_mismatch: bool = False
         xs = [x[k] for x in rows_ if not math.isnan(x[k])]
         return float(np.mean(xs)) if xs else math.nan
 
+    model_filter = model
     model = out_rows[0]["model"]
     summary_rows = [{
         "model": model, "n_conditions": len(out_rows),
@@ -234,6 +247,7 @@ def analyse_run(run_dir: Path, allow_archive_mismatch: bool = False
     }]
     prov = {
         "run_directory": str(run_dir.resolve()), "model": model, "n_conditions": len(out_rows),
+        "model_filter": model_filter, "models_in_run": models_in_run, "n_rows_in_run": n_rows_in_run,
         "expected_full_grid_conditions": 96, "is_full_grid": len(out_rows) == 96,
         "frozen_threshold": next(iter(thresholds)), "min_valid_pairs_per_class": MIN_PER_CLASS,
         "archive_mismatches_allowed": bool(allow_archive_mismatch), "archive_mismatches": mismatches,
@@ -256,7 +270,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def run_valid_pairs_analysis(run_dir: Path, out_dir: Path, overwrite: bool = False,
-                             allow_archive_mismatch: bool = False) -> dict[str, Path]:
+                             allow_archive_mismatch: bool = False, model: str | None = None) -> dict[str, Path]:
     run_dir, out_dir = Path(run_dir).resolve(), Path(out_dir).resolve()
     if _is_inside(out_dir, run_dir):
         raise ValidPairsError(f"refusing to write inside the archived run directory {run_dir}")
@@ -266,7 +280,7 @@ def run_valid_pairs_analysis(run_dir: Path, out_dir: Path, overwrite: bool = Fal
         raise ValidPairsError(f"output path exists and is not a directory: {out_dir}")
     if out_dir.is_dir() and any(out_dir.iterdir()) and not overwrite:
         raise ValidPairsError(f"refusing to write into the non-empty directory {out_dir} (new directory or --overwrite)")
-    rows, summary, prov = analyse_run(run_dir, allow_archive_mismatch)      # raises before anything is written
+    rows, summary, prov = analyse_run(run_dir, allow_archive_mismatch, model)      # raises before anything is written
     _write_csv(out_dir / BY_CONDITION, rows)
     _write_csv(out_dir / MODEL_SUMMARY, summary)
     (out_dir / PROVENANCE).write_text(json.dumps(prov, indent=2, sort_keys=True, default=str) + "\n")
@@ -284,6 +298,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, type=Path, metavar="DIR",
                     help="verification run directory (holds verification_results.csv/.json and scores/)")
+    ap.add_argument("--model", default=None, metavar="NAME",
+                    help="analyse only this model of a multi-model (combined) run, e.g. facenet or arcface; without it a run "
+                         "must hold exactly one model")
     ap.add_argument("--out", required=True, type=Path, help="NEW output directory (non-empty is refused)")
     ap.add_argument("--overwrite", action="store_true", help="allow a non-empty output directory")
     ap.add_argument("--allow-archive-mismatch", action="store_true",
@@ -295,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     try:
         written = run_valid_pairs_analysis(a.run, a.out, overwrite=a.overwrite,
-                                           allow_archive_mismatch=a.allow_archive_mismatch)
+                                           allow_archive_mismatch=a.allow_archive_mismatch, model=a.model)
     except ValidPairsError as exc:
         print(f"VALID-PAIRS ANALYSIS REFUSED: {exc}")
         return 2

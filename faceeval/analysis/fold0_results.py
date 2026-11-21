@@ -14,7 +14,11 @@ Inputs
 * PRIMARY deep runs, given as explicit directories (they live in a run tree, not under the results root):
   ``--facenet-run DIR`` and ``--arcface-run DIR``, each a directory that holds that run's
   ``verification_results.csv`` and ``verification_results.json`` (96 rows per model).
-  With both deep runs the analysis covers 6 models x 16 perturbations x 6 severities = 576 rows; with none it is the
+  Alternatively ``--deep-run DIR`` takes ONE combined run that holds both deep models (192 rows, for example the
+  archived ``benchmarks/lfw_fold0_2026-11-20/deep_core`` run). A combined run must contain exactly FaceNet and ArcFace
+  and is validated with the same per-model checks; it cannot be mixed with ``--facenet-run``/``--arcface-run``
+  (each deep model must come from exactly one run).
+  With both deep models the analysis covers 6 models x 16 perturbations x 6 severities = 576 rows; with none it is the
   original four-model, 384-row analysis (the default, unchanged).
 * HISTORICAL run: ``eigenfaces_per_image_noise`` (an earlier Eigenfaces run on another code commit). It is read
   separately and is compared with ``eigenfaces_final`` in one dedicated table only. It is never mixed into the
@@ -98,7 +102,9 @@ NOISE_PERTURBATIONS = frozenset({"gaussian_noise", "salt_pepper_noise", "speckle
 SEVERITIES = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
 CLASSICAL_RUNS = {"classical": ("fisherfaces", "lbph", "hog_svm"), "eigenfaces_final": ("eigenfaces",)}
 PRIMARY_RUNS = CLASSICAL_RUNS          # backward-compatible name: the runs that live under the results root
-DEEP_RUNS = {"facenet": ("facenet",), "arcface": ("arcface",)}     # located by explicit directories, not the root
+COMBINED_DEEP_RUN = "deep_combined"     # one run that holds both deep models (--deep-run)
+DEEP_RUNS = {"facenet": ("facenet",), "arcface": ("arcface",),     # located by explicit directories, not the root
+             COMBINED_DEEP_RUN: DEEP_MODELS}
 HISTORICAL_RUN = "eigenfaces_per_image_noise"
 CONDITIONS_PER_MODEL = 96              # 16 perturbations x 6 severities
 
@@ -392,9 +398,13 @@ def validate_primary(rows: list[dict[str, Any]], models: tuple[str, ...] = CLASS
 
 def primary_run_dirs(results_root: Path, deep_runs: dict[str, Path] | None = None) -> dict[str, tuple[Path, tuple[str, ...]]]:
     """``{run name: (directory, expected models)}`` for the primary runs. Classical runs live under the results root;
-    deep runs are given as explicit directories (``{"facenet": DIR, "arcface": DIR}``)."""
+    deep runs are given as explicit directories: ``{"facenet": DIR, "arcface": DIR}`` (one run per model) or
+    ``{"deep_combined": DIR}`` (one run holding both models, never together with the per-model entries)."""
     runs: dict[str, tuple[Path, tuple[str, ...]]] = {
         run: (Path(results_root) / run, models) for run, models in CLASSICAL_RUNS.items()}
+    if COMBINED_DEEP_RUN in (deep_runs or {}) and set(deep_runs) & set(DEEP_MODELS):
+        raise AnalysisError("a combined deep run (--deep-run) cannot be used together with --facenet-run/--arcface-run: "
+                            "each deep model must come from exactly one run")
     for name, directory in (deep_runs or {}).items():
         if name not in DEEP_RUNS:
             raise AnalysisError(f"unknown deep run '{name}'; expected one of {sorted(DEEP_RUNS)}")
@@ -407,7 +417,7 @@ def load_primary(results_root: Path, allow_nan_metrics: bool = False,
     """Load, cross-check and validate the primary rows plus a provenance record.
 
     Without ``deep_runs``: the four classical models (384 rows). With ``deep_runs`` (``{"facenet": DIR, "arcface": DIR}``
-    or either one): those models are added (576 rows for all six). Each run is validated independently before the
+    or either one, or ``{"deep_combined": DIR}`` for one run holding both): those models are added (576 rows for all six). Each run is validated independently before the
     cross-run compatibility check and the combined validation."""
     rows: list[dict[str, Any]] = []
     prov: dict[str, Any] = {"runs": {}, "input_files": {}, "run_directories": {}}
@@ -417,7 +427,9 @@ def load_primary(results_root: Path, allow_nan_metrics: bool = False,
         check_csv_json_agreement(r, meta, run)
         found = {x["model"] for x in r}
         if found != set(models):
-            raise AnalysisError(f"{run}: expected models {sorted(models)}, found {sorted(found)}")
+            hint = (" (this run holds more models than were assigned to it; a run that contains both FaceNet and ArcFace "
+                    "must be passed with --deep-run)" if set(models) < found else "")
+            raise AnalysisError(f"{run}: expected models {sorted(models)}, found {sorted(found)}{hint}")
         validate_run(r, run, models)
         check_run_metadata(r, meta, run)
         prov["runs"][run] = _provenance(meta, len(r))
@@ -1033,8 +1045,8 @@ def run_analysis(results_root: Path, out_dir: Path, figures: bool = True,
 
     ``out_dir`` must be a NEW (or empty) directory: it may not lie inside, or contain, any input run directory, and an
     existing non-empty directory is refused unless ``overwrite`` is true (so an earlier analysis is never replaced by
-    accident). ``deep_runs`` maps ``"facenet"``/``"arcface"`` to the directory holding that run's results files; without
-    it the original four-model analysis is produced."""
+    accident). ``deep_runs`` maps ``"facenet"``/``"arcface"`` (or ``"deep_combined"`` for one run holding both) to the
+    directory holding that run's results files; without it the original four-model analysis is produced."""
     results_root, out_dir = Path(results_root).resolve(), Path(out_dir).resolve()
     deep = {k: Path(v).resolve() for k, v in (deep_runs or {}).items()}
     inputs = [(results_root / run).resolve() for run in (*CLASSICAL_RUNS, HISTORICAL_RUN)] + list(deep.values())
@@ -1098,13 +1110,17 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description=("Analyse the archived LFW Fold 0 verification results (no experiment is run, no metric is "
                      "recomputed). Without deep-run options: the four classical models (384 rows). With --facenet-run "
-                     "and --arcface-run: all six models (576 rows). Deep-model values are archived END-TO-END results: "
+                     "and --arcface-run, or with --deep-run for one combined FaceNet+ArcFace run: all six models (576 rows). "
+                     "Deep-model values are archived END-TO-END results: "
                      "failed embeddings are zero vectors and their pairs are still scored, so ArcFace AUC/EER are not "
                      "valid-pairs-only recognition performance; see tables 12-13 and figure 7 for the failure rates."),
         epilog=("Example (six models, new output directory):\n"
                 "  python -m faceeval.analysis.fold0_results --results-root reports/experiment_results \\\n"
                 "      --facenet-run <facenet verification run dir> --arcface-run <arcface verification run dir> \\\n"
-                "      --out reports/experiment_results/analysis_20261119_six_models"),
+                "      --out reports/experiment_results/analysis_20261119_six_models\n"
+                "  or, for one combined FaceNet+ArcFace run:\n"
+                "  python -m faceeval.analysis.fold0_results --results-root reports/experiment_results \\\n"
+                "      --deep-run <combined deep verification run dir> --out <NEW output directory>"),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results-root", default="reports/experiment_results", type=Path,
                     help="folder holding the classical/, eigenfaces_final/ and eigenfaces_per_image_noise/ archives")
@@ -1112,6 +1128,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="directory containing the FaceNet verification_results.csv and .json (not under the results root)")
     ap.add_argument("--arcface-run", default=None, type=Path, metavar="DIR",
                     help="directory containing the ArcFace verification_results.csv and .json (not under the results root)")
+    ap.add_argument("--deep-run", default=None, type=Path, metavar="DIR",
+                    help="directory containing ONE combined verification_results.csv/.json with exactly FaceNet and ArcFace "
+                         "(192 rows); not to be combined with --facenet-run/--arcface-run")
     ap.add_argument("--out", default=None, type=Path,
                     help="NEW output directory (default: <results-root>/analysis); an existing non-empty one is refused")
     ap.add_argument("--overwrite", action="store_true", help="allow writing into an existing non-empty output directory")
@@ -1122,7 +1141,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     out = a.out or (a.results_root / "analysis")
-    deep = {k: v for k, v in (("facenet", a.facenet_run), ("arcface", a.arcface_run)) if v is not None}
+    deep = {k: v for k, v in (("facenet", a.facenet_run), ("arcface", a.arcface_run),
+                              (COMBINED_DEEP_RUN, a.deep_run)) if v is not None}
     try:
         written = run_analysis(a.results_root, out, figures=not a.no_figures, deep_runs=deep, overwrite=a.overwrite)
     except AnalysisError as exc:

@@ -293,3 +293,137 @@ def test_parser_options_are_the_documented_ones():
 def test_semantics_text_states_the_limits():
     s = V.SEMANTICS.lower()
     assert "end-to-end" in s and "zero vectors" in s and "conditional" in s and "frozen" in s and "no confidence" in s
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# A COMBINED run (two models in one verification run, as in benchmarks/lfw_fold0_2026-11-20/deep_core) is analysed one
+# model at a time with ``model=`` / ``--model``. Every other check is unchanged.
+# ---------------------------------------------------------------------------------------------------------------------
+def _combined(tmp_path):
+    """A combined run built from two single-model runs (FaceNet without failures, ArcFace with detector misses)."""
+    import shutil
+    run_fn, _ = build_run(tmp_path / "fn", failures=False, model="facenet")
+    run_ar, _ = build_run(tmp_path / "ar", failures=True, model="arcface")
+    dest = tmp_path / "combined"
+    shutil.copytree(run_fn / "scores", dest / "scores")
+    for f in (run_ar / "scores").iterdir():
+        if f.name == "test_pairs.npz":
+            assert f.read_bytes() == (dest / "scores" / f.name).read_bytes()          # one shared test pair set
+        else:
+            shutil.copy(f, dest / "scores" / f.name)
+    rows = []
+    for run in (run_fn, run_ar):
+        with open(run / "verification_results.csv", newline="") as fh:
+            rows += list(csv.DictReader(fh))
+    with open(dest / "verification_results.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    (dest / "verification_results.json").write_text(json.dumps(
+        {"protocol": "lfw_fold0_verification", "status": "COMPLETE", "n_rows": len(rows), "fold": 0, "seed": 42,
+         "results": rows}, default=str))
+    return dest, run_fn, run_ar
+
+
+def _without_run_dir(prov):
+    return {k: v for k, v in prov.items()
+            if k not in ("run_directory", "model_filter", "models_in_run", "n_rows_in_run", "run_json", "input_sha256")}
+
+
+def test_multi_model_run_is_refused_without_model_and_names_the_option(tmp_path):
+    dest, _, _ = _combined(tmp_path)
+    with pytest.raises(V.ValidPairsError, match=r"exactly one model, found \['arcface', 'facenet'\].*--model"):
+        V.analyse_run(dest)
+    assert V.main(["--run", str(dest), "--out", str(tmp_path / "o")]) == 2
+    assert not (tmp_path / "o").exists()                                                  # a refused run writes nothing
+
+
+@pytest.mark.parametrize("model", ["facenet", "arcface"])
+def test_model_selection_gives_exactly_the_single_model_run_result(tmp_path, model):
+    dest, run_fn, run_ar = _combined(tmp_path)
+    single = {"facenet": run_fn, "arcface": run_ar}[model]
+    rows_c, summ_c, prov_c = V.analyse_run(dest, model=model)
+    rows_s, summ_s, prov_s = V.analyse_run(single)
+    assert rows_c == rows_s and summ_c == summ_s and len(rows_c) == 9 and {r["model"] for r in rows_c} == {model}
+    assert _without_run_dir(prov_c) == _without_run_dir(prov_s)
+    assert prov_c["model_filter"] == model and prov_c["models_in_run"] == ["arcface", "facenet"] and prov_c["n_rows_in_run"] == 18
+    assert prov_s["model_filter"] is None and prov_s["n_rows_in_run"] == 9
+    assert prov_c["input_sha256"]["scores/test_pairs.npz"] == prov_s["input_sha256"]["scores/test_pairs.npz"]
+    assert set(prov_c["score_file_sha256"]) == {f"{model}__{r['perturbation']}__sev{r['severity']:.2f}.npz" for r in rows_c}
+
+
+def test_models_of_a_combined_run_keep_their_own_failure_profile(tmp_path):
+    dest, _, _ = _combined(tmp_path)
+    fn, _, _ = V.analyse_run(dest, model="facenet")
+    ar, _, _ = V.analyse_run(dest, model="arcface")
+    assert all(r["n_failed_embeddings"] == 0 and r["valid_pair_rate_balanced"] == 1.0 for r in fn)
+    assert any(r["n_failed_embeddings"] > 0 and r["valid_pair_rate_balanced"] < 1.0 for r in ar)
+
+
+def test_unknown_model_is_refused_and_a_single_model_run_checks_the_name(tmp_path):
+    dest, run_fn, _ = _combined(tmp_path)
+    with pytest.raises(V.ValidPairsError, match=r"--model 'insightface' is not in this run \(models in the CSV: \['arcface', 'facenet'\]\)"):
+        V.analyse_run(dest, model="insightface")
+    with pytest.raises(V.ValidPairsError, match="--model 'arcface' is not in this run"):
+        V.analyse_run(run_fn, model="arcface")                                          # a facenet-only run
+    assert V.analyse_run(run_fn, model="facenet")[0] == V.analyse_run(run_fn)[0]        # naming the only model is harmless
+
+
+def test_checks_apply_to_the_selected_model_and_do_not_leak_across_models(tmp_path):
+    dest, _, _ = _combined(tmp_path)
+    target = dest / "scores" / "arcface__sunglasses__sev1.00.npz"
+    z = dict(np.load(target, allow_pickle=False))
+    z["s_bal"] = z["s_bal"] + 0.01                                                      # tamper with ONE ArcFace score file
+    np.savez_compressed(target, **z)
+    with pytest.raises(V.ValidPairsError, match="not reproducible from the saved scores"):
+        V.analyse_run(dest, model="arcface")
+    assert len(V.analyse_run(dest, model="facenet")[0]) == 9                            # FaceNet's own files are intact
+    with pytest.raises(V.ValidPairsError, match="exactly one model"):
+        V.analyse_run(dest)
+
+
+def test_duplicate_condition_and_missing_score_file_in_a_combined_run_are_refused(tmp_path):
+    dest, _, _ = _combined(tmp_path)
+    (dest / "scores" / "facenet__rotation__sev0.50.npz").unlink()
+    with pytest.raises(V.ValidPairsError, match="missing score file facenet__rotation__sev0.50.npz"):
+        V.analyse_run(dest, model="facenet")
+    assert len(V.analyse_run(dest, model="arcface")[0]) == 9
+    with open(dest / "verification_results.csv", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    rows.append(dict(rows[0]))
+    with open(dest / "verification_results.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    with pytest.raises(V.ValidPairsError, match="duplicate"):
+        V.analyse_run(dest, model="arcface")
+
+
+def test_combined_run_directory_is_never_modified_and_cli_model_option_works(tmp_path, capsys):
+    dest, _, _ = _combined(tmp_path)
+    before = {str(p.relative_to(dest)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(dest.rglob("*")) if p.is_file()}
+    for model in ("facenet", "arcface"):
+        out = tmp_path / f"out_{model}"
+        assert V.main(["--run", str(dest), "--model", model, "--out", str(out)]) == 0
+        assert {p.name for p in out.iterdir()} == {V.BY_CONDITION, V.MODEL_SUMMARY, V.PROVENANCE}
+        assert json.loads((out / V.PROVENANCE).read_text())["model_filter"] == model
+    assert V.main(["--run", str(dest), "--model", "insightface", "--out", str(tmp_path / "bad")]) == 2
+    assert "REFUSED" in capsys.readouterr().out and not (tmp_path / "bad").exists()
+    after = {str(p.relative_to(dest)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(dest.rglob("*")) if p.is_file()}
+    assert before == after
+    assert "--model" in V.build_parser().format_help()
+
+
+REAL_DEEP_CORE = Path(__file__).resolve().parent.parent / "benchmarks" / "lfw_fold0_2026-11-20" / "deep_core"
+
+
+@pytest.mark.skipif(not (REAL_DEEP_CORE / "scores" / "test_pairs.npz").is_file(), reason="the archived deep_core run is not present")
+@pytest.mark.parametrize("model", ["facenet", "arcface"])
+def test_real_archived_deep_core_scores_reproduce_the_archived_values(tmp_path, model):
+    """The archived end-to-end values of every one of the 96 conditions are reproduced from the saved scores (no
+    mismatch allowed), and the run directory is not modified."""
+    before = {p.name: p.stat().st_size for p in sorted((REAL_DEEP_CORE / "scores").iterdir())}
+    rows, summary, prov = V.analyse_run(REAL_DEEP_CORE, model=model)
+    assert len(rows) == 96 and prov["is_full_grid"] and prov["archive_mismatches"] == [] and all(r["archive_reproduced"] for r in rows)
+    assert prov["n_rows_in_run"] == 192 and prov["models_in_run"] == ["arcface", "facenet"]
+    assert before == {p.name: p.stat().st_size for p in sorted((REAL_DEEP_CORE / "scores").iterdir())}
