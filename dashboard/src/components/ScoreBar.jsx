@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./ScoreBar.css";
+import { fmt } from "../lib/format";
 
 // Mirrors faceeval.visualization.style OKABE_ITO mapping used in the
 // matplotlib figures, so the dashboard and the thesis PDF/PNG figures
@@ -57,7 +58,7 @@ export default function ScoreBar({ score, maxScore = 1.0, compact = false }) {
           })}
         </div>
         <span className="scorebar-total num">
-          {score.total_score.toFixed(3)}
+          {fmt(score.total_score)}
         </span>
       </div>
 
@@ -71,9 +72,9 @@ export default function ScoreBar({ score, maxScore = 1.0, compact = false }) {
             {DIM_LABELS[hovered] || hovered}
           </span>
           <span className="scorebar-tooltip-detail num">
-            score {score.component_scores[hovered]?.toFixed(3)} × weight{" "}
-            {(score.weighted_components[hovered] / score.component_scores[hovered] || 0).toFixed(2)}{" "}
-            = {score.weighted_components[hovered]?.toFixed(3)}
+            score {fmt(score.component_scores[hovered])} × weight{" "}
+            {fmt(score.weighted_components[hovered] / score.component_scores[hovered], 2)}{" "}
+            = {fmt(score.weighted_components[hovered])}
           </span>
         </div>
       )}

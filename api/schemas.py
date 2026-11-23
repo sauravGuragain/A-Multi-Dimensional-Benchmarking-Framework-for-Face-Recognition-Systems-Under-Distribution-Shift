@@ -28,9 +28,9 @@ class RunDetailResponse(BaseModel):
     run_id: str
     status: str
     config: dict[str, Any]
-    started_at: str | None
-    completed_at: str | None
-    duration_seconds: float | None
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_seconds: float | None = None
     error_message: str = ""
     num_evaluation_results: int
     num_fingerprints: int
@@ -47,13 +47,14 @@ class EvaluationResultResponse(BaseModel):
     dataset_name: str
     perturbation_type: str | None = None
     severity: float | None = None
-    accuracy: float
-    precision: float
-    recall: float
-    f1_score: float
-    auc: float
-    eer: float
-    num_samples: int
+    # None means "not recorded" - missing values are never reported as 0.
+    accuracy: float | None = None
+    precision: float | None = None
+    recall: float | None = None
+    f1_score: float | None = None
+    auc: float | None = None
+    eer: float | None = None
+    num_samples: int | None = None
 
 
 class EvaluationResultListResponse(BaseModel):
@@ -75,6 +76,7 @@ class FingerprintResponse(BaseModel):
 
 class FingerprintListResponse(BaseModel):
     fingerprints: list[FingerprintResponse]
+    skipped: int = 0   # stored entries that were malformed and not shown
 
 
 class FingerprintComparisonResponse(BaseModel):
@@ -92,8 +94,8 @@ class FingerprintComparisonResponse(BaseModel):
 class DeploymentScoreResponse(BaseModel):
     model_name: str
     paradigm: str
-    rank: int | None
-    total_score: float
+    rank: int | None = None
+    total_score: float | None = None
     component_scores: dict[str, float]
     weighted_components: dict[str, float]
     recommendation: str
@@ -175,3 +177,17 @@ class HealthResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class StatusResponse(BaseModel):
+    """What the API can currently see. Used by the dashboard for empty states."""
+    db_path: str
+    db_exists: bool
+    db_readable: bool
+    db_error: str | None = None
+    run_count: int | None = None
+    figures_dir: str
+    figures_dir_exists: bool
+    reports_dir: str
+    reports_dir_exists: bool
+    read_only: bool = True

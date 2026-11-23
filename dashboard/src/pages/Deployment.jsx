@@ -1,74 +1,40 @@
-import { useEffect, useState } from "react";
-import { PageHeader, Panel, Spinner, EmptyState, ParadigmTag } from "../components/PageHeader";
+import { useState } from "react";
+import { PageHeader, Panel, Spinner, EmptyState, ErrorState, ParadigmTag, Notice } from "../components/PageHeader";
 import ScoreBar, { ScoreBarLegend } from "../components/ScoreBar";
 import api from "../api/client";
+import useApi from "../api/useApi";
+import { fmt, isNum } from "../lib/format";
+
+const label = (s) => String(s).replace(/_/g, " ");
 
 export default function Deployment({ runId }) {
-  const [rankings, setRankings] = useState([]);
-  const [scenario, setScenario] = useState(null);
-  const [guide, setGuide] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [chosen, setChosen] = useState(null);
+  const rk = useApi(() => api.listRankings(runId), [runId], !!runId);
+  // The decision guide is a bonus: if it fails the rankings still show.
+  const dg = useApi(() => api.getDecisionGuide(runId).catch(() => null), [runId], !!runId);
 
-  useEffect(() => {
-    if (!runId) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    Promise.all([
-      api.listRankings(runId),
-      api.getDecisionGuide(runId).catch(() => null),
-    ])
-      .then(([rk, dg]) => {
-        setRankings(rk);
-        setGuide(dg);
-        if (rk.length) setScenario(rk[0].scenario);
-      })
-      .finally(() => setLoading(false));
-  }, [runId]);
+  const head = <PageHeader eyebrow="FaceEval-X" title="Deployment Scoring" />;
+  if (!runId) return <>{head}<Panel><EmptyState title="No run selected" /></Panel></>;
+  if (rk.loading) return <>{head}<Panel><Spinner /></Panel></>;
+  if (rk.error) return <>{head}<Panel><ErrorState title="Could not load rankings" error={rk.error} /></Panel></>;
 
-  if (!runId) {
-    return (
-      <>
-        <PageHeader eyebrow="FaceEval-X" title="Deployment Scoring" />
-        <Panel>
-          <EmptyState title="No run selected" />
-        </Panel>
-      </>
-    );
-  }
-
-  if (loading) {
-    return (
-      <>
-        <PageHeader eyebrow="FaceEval-X" title="Deployment Scoring" />
-        <Panel>
-          <Spinner />
-        </Panel>
-      </>
-    );
-  }
-
+  const rankings = rk.data || [];
+  const scenario = rankings.some((r) => r.scenario === chosen) ? chosen : rankings[0]?.scenario;
   const active = rankings.find((r) => r.scenario === scenario);
-  const guideEntry = guide?.scenarios?.[scenario];
+  const guideEntry = dg.data?.scenarios?.[scenario];
+  const rec = guideEntry?.recommended_model;
 
   return (
     <>
       <PageHeader
         eyebrow="Practitioner decision guide"
         title="Deployment Scoring"
-        description="Context-weighted composite scores. Switch scenarios to see how the ranking changes with deployment priorities."
+        description="Context-weighted composite scores stored with this run. Switch scenarios to see how the ranking changes with the weights."
         actions={
           rankings.length > 0 && (
-            <select
-              className="inline-select"
-              value={scenario || ""}
-              onChange={(e) => setScenario(e.target.value)}
-            >
+            <select className="inline-select" value={scenario || ""} onChange={(e) => setChosen(e.target.value)}>
               {rankings.map((r) => (
-                <option key={r.scenario} value={r.scenario}>
-                  {r.scenario.replace(/_/g, " ")}
-                </option>
+                <option key={r.scenario} value={r.scenario}>{label(r.scenario)}</option>
               ))}
             </select>
           )
@@ -79,49 +45,45 @@ export default function Deployment({ runId }) {
         <Panel>
           <EmptyState
             title="No deployment rankings"
-            description="Run the deployment scorer for this experiment to populate this view."
+            description="This run has no stored deployment rankings."
           />
         </Panel>
       ) : (
         <>
-          {guideEntry && (
-            <Panel
-              title="Recommendation"
-              subtitle={guideEntry.description}
-            >
+          <Notice>
+            Scores are weighted composites. The scorer sets any component it has no data for to a
+            neutral 0.5, so a high score does not by itself show that a model was measured on every
+            dimension. Treat this as a summary of the stored run, not an independent recommendation.
+          </Notice>
+
+          {rec && (
+            <Panel title="Recommendation (generated text)" subtitle={guideEntry.description}>
               <div className="rec-row">
                 <div>
-                  <span className="rec-model">{guideEntry.recommended_model.name}</span>
-                  <ParadigmTag paradigm={guideEntry.recommended_model.paradigm} />
+                  <span className="rec-model">{rec.name}</span>
+                  {rec.paradigm && <ParadigmTag paradigm={rec.paradigm} />}
                 </div>
-                <span className="num rec-score">
-                  {guideEntry.recommended_model.total_score.toFixed(3)}
-                </span>
+                <span className="num rec-score">{fmt(rec.total_score)}</span>
               </div>
-              <p className="rec-text">{guideEntry.recommended_model.recommendation_text}</p>
+              <p className="rec-text">{rec.recommendation_text}</p>
               {guideEntry.warnings?.length > 0 && (
                 <div className="rec-warnings">
                   {guideEntry.warnings.map((w, i) => (
-                    <div key={i} className="rec-warning">
-                      {w}
-                    </div>
+                    <div key={i} className="rec-warning">{w}</div>
                   ))}
                 </div>
               )}
             </Panel>
           )}
 
-          <Panel
-            title="Ranked models"
-            subtitle={`Weighted score breakdown — ${scenario.replace(/_/g, " ")}`}
-          >
+          <Panel title="Ranked models" subtitle={`Weighted score breakdown — ${label(scenario)}`}>
             <div className="rank-list">
               {active.ranked_scores.map((s) => (
                 <div key={s.model_name} className="rank-row">
                   <div className="rank-row-head">
-                    <span className="rank-position">#{s.rank}</span>
+                    <span className="rank-position">{isNum(s.rank) ? `#${s.rank}` : "—"}</span>
                     <span className="rank-model-name">{s.model_name}</span>
-                    <ParadigmTag paradigm={s.paradigm} />
+                    {s.paradigm && <ParadigmTag paradigm={s.paradigm} />}
                   </div>
                   <ScoreBar score={s} />
                 </div>
@@ -134,7 +96,7 @@ export default function Deployment({ runId }) {
             <div className="weights-grid">
               {Object.entries(active.weights).map(([dim, w]) => (
                 <div key={dim} className="weight-chip">
-                  <span className="weight-chip-label">{dim.replace(/_/g, " ")}</span>
+                  <span className="weight-chip-label">{label(dim)}</span>
                   <span className="num weight-chip-value">{(w * 100).toFixed(0)}%</span>
                 </div>
               ))}

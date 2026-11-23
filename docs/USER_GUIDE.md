@@ -246,10 +246,13 @@ Repeats the thesis experiment configuration (`configs/lfw_intermediate.yaml`). I
 
 ## 10. Optional: API and dashboard
 
+Two Terminal windows, from the repository root (or run `./start.sh`):
+
 ```bash
-cp .env.example .env
-uvicorn api.main:app --port 8000
-cd dashboard && npm install && npm run dev      # http://localhost:5173
+source .venv-facenet/bin/activate               # or .venv
+uvicorn api.main:app --host 127.0.0.1 --port 8000
+
+cd dashboard && npm ci && npm run dev -- --host 127.0.0.1    # http://127.0.0.1:5173
 ```
 
-They only read `experiments/results.db`. They are not needed for the thesis numbers and were not part of the verification reported in the thesis.
+They only read `experiments/results.db` (never writing to it) and do not show the Fold-0 analysis in `benchmarks/`. If the database path is wrong the dashboard says so instead of creating one; `http://127.0.0.1:8000/api/status` shows what the API sees. Nothing reads `.env` automatically; export `FACEEVAL_DB_PATH` etc. if you need other paths. They are not needed for the thesis numbers and were not part of the verification reported in the thesis.

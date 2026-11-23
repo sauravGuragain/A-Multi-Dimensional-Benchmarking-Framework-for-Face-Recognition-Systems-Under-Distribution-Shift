@@ -48,6 +48,7 @@ dlib = [
 ]
 dev = [
     "pytest>=7.4",
+    "httpx>=0.25",          # FastAPI TestClient (tests/test_api_dashboard.py)
     "pytest-cov>=4.1",
     "mypy>=1.5",
     "ruff>=0.1",
