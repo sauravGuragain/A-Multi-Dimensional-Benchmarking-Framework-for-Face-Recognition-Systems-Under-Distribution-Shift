@@ -186,3 +186,15 @@
     transform: rotate(360deg);
   }
 }
+
+.empty-state-error h3 { color: var(--bad, #e5766b); }
+.empty-state-error .empty-state-mark { color: var(--bad, #e5766b); }
+.notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border-left: 3px solid var(--line-strong, #4a5568);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink-300, #a0aec0);
+}

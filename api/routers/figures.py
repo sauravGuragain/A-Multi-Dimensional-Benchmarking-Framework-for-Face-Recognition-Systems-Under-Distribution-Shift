@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -11,39 +12,54 @@ from api.schemas import FigureInfo, FigureListResponse
 router = APIRouter(prefix="/api/figures", tags=["figures"])
 
 
+_FIGURE_TYPES = {".png": "image/png", ".svg": "image/svg+xml"}
+
+
+def _safe_join(base: Path, rel: str) -> Path | None:
+    """Resolve ``rel`` under ``base``; None if it would escape (``..``, absolute, symlink)."""
+    try:
+        full = (base / rel).resolve()
+        full.relative_to(base.resolve())
+    except (ValueError, OSError):
+        return None
+    return full
+
+
 @router.get("", response_model=FigureListResponse)
 def list_figures(
     subfolder: str = "",
     settings: Settings = Depends(get_settings),
 ) -> FigureListResponse:
     """
-    List all available figures, optionally scoped to a subfolder
-    (e.g. a specific run_id).
+    List available PNG figures, optionally scoped to a subfolder
+    (e.g. a specific run_id).  A missing folder gives an empty list.
     """
-    base = Path(settings.figures_dir) / subfolder if subfolder else Path(settings.figures_dir)
-    if not base.exists():
+    root = Path(settings.figures_dir)
+    base = _safe_join(root, subfolder) if subfolder else root.resolve()
+    if base is None:
+        raise HTTPException(400, "Invalid subfolder.")
+    if not base.is_dir():
         return FigureListResponse(figures=[])
 
+    root_resolved = root.resolve()
     figures: list[FigureInfo] = []
-    seen_ids: set[str] = set()
 
     for png_path in sorted(base.rglob("*.png")):
-        figure_id = png_path.stem
-        if figure_id in seen_ids:
+        if not png_path.is_file() or _safe_join(root_resolved, str(png_path.relative_to(root_resolved))) is None:
             continue
-        seen_ids.add(figure_id)
+        figure_id = png_path.stem   # not unique across folders; the URL is the unique key
 
         svg_path = png_path.with_suffix(".svg")
-        rel = png_path.relative_to(Path(settings.figures_dir))
-        rel_svg = svg_path.relative_to(Path(settings.figures_dir)) if svg_path.exists() else None
+        rel = png_path.relative_to(root_resolved)
+        rel_svg = svg_path.relative_to(root_resolved) if svg_path.is_file() else None
 
         figures.append(FigureInfo(
             figure_id=figure_id,
             figure_type=_infer_type(figure_id),
             title=figure_id.replace("_", " ").title(),
             caption="",
-            png_url=f"/api/figures/file/{rel.as_posix()}",
-            svg_url=f"/api/figures/file/{rel_svg.as_posix()}" if rel_svg else None,
+            png_url=f"/api/figures/file/{quote(rel.as_posix())}",
+            svg_url=f"/api/figures/file/{quote(rel_svg.as_posix())}" if rel_svg else None,
         ))
 
     return FigureListResponse(figures=figures)
@@ -54,20 +70,15 @@ def get_figure_file(
     file_path: str,
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
-    """Serve a specific figure file by relative path."""
-    full_path = Path(settings.figures_dir) / file_path
-    # Prevent path traversal outside the figures directory
-    try:
-        full_path = full_path.resolve()
-        base = Path(settings.figures_dir).resolve()
-        full_path.relative_to(base)
-    except ValueError:
+    """Serve one PNG or SVG figure by path relative to the figures directory."""
+    full_path = _safe_join(Path(settings.figures_dir), file_path)
+    if full_path is None:
         raise HTTPException(400, "Invalid file path.")
-
-    if not full_path.exists() or not full_path.is_file():
+    media_type = _FIGURE_TYPES.get(full_path.suffix.lower())
+    if media_type is None:
+        raise HTTPException(415, "Only .png and .svg figures are served.")
+    if not full_path.is_file():
         raise HTTPException(404, f"Figure file not found: '{file_path}'")
-
-    media_type = "image/svg+xml" if full_path.suffix == ".svg" else "image/png"
     return FileResponse(str(full_path), media_type=media_type)
 
 

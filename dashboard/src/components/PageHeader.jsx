@@ -69,3 +69,18 @@ export function EmptyState({ title, description, action }) {
 export function Spinner() {
   return <div className="spinner" aria-label="Loading" />;
 }
+
+export function ErrorState({ title = "Could not load data", error }) {
+  return (
+    <div className="empty-state empty-state-error" role="alert">
+      <div className="empty-state-mark">!</div>
+      <h3>{title}</h3>
+      {error && <p>{error}</p>}
+    </div>
+  );
+}
+
+// A short factual caveat shown above results (e.g. how a score is computed).
+export function Notice({ children }) {
+  return <p className="notice">{children}</p>;
+}

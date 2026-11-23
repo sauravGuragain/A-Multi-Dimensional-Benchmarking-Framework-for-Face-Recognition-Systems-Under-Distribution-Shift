@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test": "node --test src/lib/clean.test.js src/lib/summary.test.js src/lib/readonly.test.js"
   },
   "dependencies": {
     "react": "^18.3.1",

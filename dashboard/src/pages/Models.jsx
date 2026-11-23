@@ -1,104 +1,92 @@
-import { useEffect, useState } from "react";
-import { PageHeader, Panel, Spinner, EmptyState, ParadigmTag } from "../components/PageHeader";
+import { useMemo, useState } from "react";
+import { PageHeader, Panel, Spinner, EmptyState, ErrorState, ParadigmTag, Notice } from "../components/PageHeader";
 import AdcChart from "../components/AdcChart";
 import api from "../api/client";
+import useApi from "../api/useApi";
+import { fmt } from "../lib/format";
+import { summarize, cleanCell, cleanTooltip } from "../lib/summary";
 
 export default function Models({ runId }) {
-  const [results, setResults] = useState([]);
-  const [perturbations, setPerturbations] = useState([]);
-  const [selectedPt, setSelectedPt] = useState(null);
-  const [adcSeries, setAdcSeries] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [chosenPt, setChosenPt] = useState(null);
+  const res = useApi(() => api.listResults(runId), [runId], !!runId);
 
-  useEffect(() => {
-    if (!runId) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    api
-      .listResults(runId)
-      .then((r) => {
-        setResults(r.results);
-        const pts = [...new Set(r.results.map((x) => x.perturbation_type).filter(Boolean))];
-        setPerturbations(pts);
-        if (pts.length) setSelectedPt(pts[0]);
-      })
-      .finally(() => setLoading(false));
-  }, [runId]);
+  const results = res.data?.results || [];
+  const perturbations = useMemo(
+    () => [...new Set(results.map((x) => x.perturbation_type).filter(Boolean))],
+    [results]
+  );
+  const models = useMemo(() => [...new Set(results.map((r) => r.model_name))], [results]);
+  const selectedPt = perturbations.includes(chosenPt) ? chosenPt : perturbations[0] || null;
+  const rows = useMemo(() => summarize(results), [results]);
 
-  useEffect(() => {
-    if (!runId || !selectedPt) return;
-    const models = [...new Set(results.map((r) => r.model_name))];
-    Promise.all(
-      models.map((m) =>
-        api
-          .getAdcCurve(runId, m, selectedPt)
-          .then((d) => ({ model_name: m, points: d.points }))
-      )
-    ).then(setAdcSeries);
-  }, [runId, selectedPt, results]);
+  const adc = useApi(
+    () =>
+      Promise.all(
+        models.map((m) =>
+          api.getAdcCurve(runId, m, selectedPt).then((d) => ({ model_name: m, points: d.points }))
+        )
+      ),
+    [runId, selectedPt, models.join("|")],
+    !!runId && !!selectedPt && models.length > 0
+  );
 
-  if (!runId) {
-    return (
-      <>
-        <PageHeader eyebrow="FaceEval-X" title="Model Comparison" />
-        <Panel>
-          <EmptyState title="No run selected" />
-        </Panel>
-      </>
-    );
-  }
-
-  // Summarize: best clean accuracy per model
-  const byModel = {};
-  for (const r of results) {
-    if (!byModel[r.model_name]) byModel[r.model_name] = { ...r, count: 0, accSum: 0 };
-    byModel[r.model_name].count += 1;
-    byModel[r.model_name].accSum += r.accuracy;
-  }
-  const rows = Object.values(byModel)
-    .map((r) => ({ ...r, meanAccuracy: r.accSum / r.count }))
-    .sort((a, b) => b.meanAccuracy - a.meanAccuracy);
+  const head = <PageHeader eyebrow="Benchmark" title="Model Comparison" />;
+  if (!runId) return <>{head}<Panel><EmptyState title="No run selected" /></Panel></>;
+  if (res.loading) return <>{head}<Panel><Spinner /></Panel></>;
+  if (res.error) return <>{head}<Panel><ErrorState title="Could not load results" error={res.error} /></Panel></>;
 
   return (
     <>
       <PageHeader
         eyebrow="Benchmark"
         title="Model Comparison"
-        description="Mean accuracy across all evaluated conditions, and accuracy-degradation behavior under one selected perturbation."
+        description="Stored evaluation results for this run, and accuracy vs. severity for one perturbation."
       />
 
-      <Panel title="Mean accuracy by model" subtitle={`${results.length} (model × condition) evaluations`}>
-        {loading ? (
-          <Spinner />
-        ) : rows.length === 0 ? (
-          <EmptyState title="No evaluation results yet" />
+      <Panel title="Accuracy by model" subtitle={`${results.length} (model × condition) evaluations`}>
+        {rows.length === 0 ? (
+          <EmptyState
+            title="No evaluation results in this run"
+            description="This run has no stored evaluation results."
+          />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Paradigm</th>
-                <th>Mean accuracy</th>
-                <th>AUC</th>
-                <th>EER</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.model_name}>
-                  <td>{r.model_name}</td>
-                  <td>
-                    <ParadigmTag paradigm={r.model_paradigm} />
-                  </td>
-                  <td className="num">{r.meanAccuracy.toFixed(4)}</td>
-                  <td className="num">{r.auc.toFixed(4)}</td>
-                  <td className="num">{r.eer.toFixed(4)}</td>
+          <>
+            <Notice>
+              Clean accuracy is the unperturbed condition: rows with no perturbation, severity 0.0 (an exact
+              copy of the image for every perturbation type) and, for brightness and gamma only, severity 0.5
+              (identity). Equivalent clean rows count once; if they disagree the range is shown. Contrast
+              has no exact neutral severity, so it is not treated as clean at 0.5. "Mean (all)" averages
+              every stored condition, clean and perturbed together (so the clean condition is counted in it
+              once per stored clean row), and AUC/EER are means over the conditions where they were
+              recorded. A dash means the value was not stored.
+            </Notice>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Paradigm</th>
+                  <th>Conditions</th>
+                  <th>Clean accuracy</th>
+                  <th>Mean accuracy (all)</th>
+                  <th>Mean AUC</th>
+                  <th>Mean EER</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.model}>
+                    <td>{r.model}</td>
+                    <td><ParadigmTag paradigm={r.paradigm} /></td>
+                    <td className="num">{r.conditions}</td>
+                    <td className="num" title={cleanTooltip(r.clean)}>{cleanCell(r.clean)}</td>
+                    <td className="num">{fmt(r.meanAccuracy, 4)}</td>
+                    <td className="num">{fmt(r.meanAuc, 4)}</td>
+                    <td className="num">{fmt(r.meanEer, 4)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </Panel>
 
@@ -110,20 +98,25 @@ export default function Models({ runId }) {
             <select
               className="inline-select"
               value={selectedPt || ""}
-              onChange={(e) => setSelectedPt(e.target.value)}
+              onChange={(e) => setChosenPt(e.target.value)}
             >
               {perturbations.map((pt) => (
-                <option key={pt} value={pt}>
-                  {pt.replace(/_/g, " ")}
-                </option>
+                <option key={pt} value={pt}>{pt.replace(/_/g, " ")}</option>
               ))}
             </select>
           }
         >
-          {adcSeries.length > 0 ? (
-            <AdcChart series={adcSeries} perturbationLabel={selectedPt?.replace(/_/g, " ")} />
-          ) : (
+          {adc.loading ? (
             <Spinner />
+          ) : adc.error ? (
+            <ErrorState title="Could not load curve" error={adc.error} />
+          ) : (adc.data || []).some((s) => s.points.length > 0) ? (
+            <AdcChart
+              series={adc.data.filter((s) => s.points.length > 0)}
+              perturbationLabel={selectedPt?.replace(/_/g, " ")}
+            />
+          ) : (
+            <EmptyState title="No complete points for this perturbation" />
           )}
         </Panel>
       )}

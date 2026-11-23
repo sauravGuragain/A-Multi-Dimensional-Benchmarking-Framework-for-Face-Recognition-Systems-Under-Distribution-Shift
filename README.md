@@ -185,13 +185,30 @@ No total test count is claimed for the current commit. The 40 tests added with t
 
 ## Optional: API and dashboard
 
+A read-only dashboard over `experiments/results.db` (the identification-protocol runs written by `ExperimentRunner`). It does not change the database, run models or regenerate any result, and it does not show the canonical Fold-0 six-model analysis, which lives in `benchmarks/lfw_fold0_2026-11-20/` (see `docs/RESULTS_MAP.md`).
+
+macOS, from the repository root, in two Terminal windows:
+
 ```bash
-cp .env.example .env
-uvicorn api.main:app --port 8000          # serves experiments/results.db read-only
-cd dashboard && npm install && npm run dev
+# Window 1 - API (use .venv-facenet or .venv, whichever you installed)
+source .venv-facenet/bin/activate
+python -m pip install -e .                # once, if fastapi/uvicorn are missing
+uvicorn api.main:app --host 127.0.0.1 --port 8000
+
+# Window 2 - dashboard (Node 18+)
+cd dashboard
+npm ci                                    # once (installs exactly what package-lock.json pins)
+npm run dev -- --host 127.0.0.1           # then open http://127.0.0.1:5173
 ```
 
-`start.sh` opens these in Terminal tabs on macOS; edit `PROJECT_DIR` inside it first. The API and dashboard were not part of the verification reported in the thesis.
+`./start.sh` does the same in two Terminal windows. `./start.sh --dry-run` runs the checks and prints the commands without starting or writing anything. It uses `FACEEVAL_VENV` if set (and stops if that environment lacks fastapi/uvicorn); otherwise the first of `.venv-facenet` / `.venv` that has fastapi and uvicorn. It stops if port 8000 or 5173 is busy and rejects unknown arguments.
+
+- Settings are environment variables (`.env.example` lists them); nothing reads `.env` automatically. Defaults: `FACEEVAL_DB_PATH=experiments/results.db`, `FACEEVAL_FIGURES_DIR=reports/figures`, `FACEEVAL_REPORTS_DIR=reports`.
+- If the database path is wrong the dashboard says so; the API never creates a database.
+- `http://127.0.0.1:8000/api/status` shows which database, figures and reports folders the API is using.
+- Figures (`.png`/`.svg`) and reports (`.csv`/`.json`/`.pdf`, file name containing the run id) are served read-only. Checks: `pytest tests/test_api_dashboard.py tests/test_dashboard_clean_semantics.py tests/test_start_script.py` (needs `httpx`, included in `.[dev]`; the clean-semantics test also uses `node` if installed) and `cd dashboard && npm test && npm run lint && npm run build`.
+- Model Comparison shows a *clean accuracy* (unperturbed rows, severity 0.0 for every perturbation type, and severity 0.5 for brightness and gamma only; equivalent rows count once, and disagreeing rows show a range) next to the *mean over all stored conditions*; they are different quantities. Contrast has no exact neutral severity.
+- Deployment scores are weighted composites in which a missing component is set to a neutral 0.5 by the scorer, and fingerprint axes for perturbations that were not evaluated are stored as 0.0; the pages say so. They are not the Fold-0 evidence.
 
 ## Licence
 

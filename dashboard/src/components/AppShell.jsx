@@ -9,7 +9,8 @@ const NAV_ITEMS = [
   { to: "/figures", label: "Figures", glyph: "▥" },
 ];
 
-export default function AppShell({ runId, runs, onSelectRun, children }) {
+export default function AppShell({ runId, runs, totalRuns = 0, conn = "ok", onSelectRun, children }) {
+  const failed = typeof conn === "object" && conn !== null;
   return (
     <div className="shell">
       <aside className="rail">
@@ -31,13 +32,18 @@ export default function AppShell({ runId, runs, onSelectRun, children }) {
             value={runId || ""}
             onChange={(e) => onSelectRun(e.target.value)}
           >
-            {runs.length === 0 && <option value="">No runs yet</option>}
+            {runs.length === 0 && <option value="">{failed ? "Unavailable" : "No runs yet"}</option>}
             {runs.map((r) => (
               <option key={r.run_id} value={r.run_id}>
                 {r.experiment_name} — {r.run_id.slice(0, 8)}
               </option>
             ))}
           </select>
+          {totalRuns > runs.length && (
+            <div className="rail-label" role="status">
+              Showing the {runs.length} most recent of {totalRuns} runs
+            </div>
+          )}
         </div>
 
         <nav className="rail-nav">
@@ -57,12 +63,26 @@ export default function AppShell({ runId, runs, onSelectRun, children }) {
         </nav>
 
         <div className="rail-foot">
-          <span className="rail-foot-dot" />
-          API connected
+          <span className="rail-foot-dot" style={failed ? { background: "#e5484d" } : undefined} />
+          {failed
+            ? conn.status === 503
+              ? "API up · database unavailable"
+              : "API unreachable"
+            : conn === "loading"
+            ? "Connecting…"
+            : "API connected · read-only"}
         </div>
       </aside>
 
-      <main className="main scroll-region">{children}</main>
+      <main className="main scroll-region">
+        {failed && (
+          <div className="empty-state empty-state-error" role="alert" style={{ marginBottom: 16 }}>
+            <h3>{conn.status === 503 ? "Results database unavailable" : "Cannot load runs"}</h3>
+            <p>{conn.error}</p>
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   );
 }
